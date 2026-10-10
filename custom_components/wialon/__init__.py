@@ -1,0 +1,83 @@
+"""The Wialon integration."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+from .api import WialonAuthError, WialonClient, WialonConnectionError, WialonError
+from .const import CONF_API_URL, CONF_TOKEN, CONF_UNITS, DOMAIN
+from .coordinator import WialonCoordinator
+
+PLATFORMS = [Platform.DEVICE_TRACKER, Platform.SENSOR]
+
+
+@dataclass
+class WialonData:
+    """Runtime data."""
+
+    client: WialonClient
+    coordinator: WialonCoordinator
+
+
+type WialonConfigEntry = ConfigEntry[WialonData]
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: WialonConfigEntry) -> bool:
+    """Set up Wialon from a config entry."""
+    client = WialonClient(
+        async_get_clientsession(hass), entry.data[CONF_API_URL], entry.data[CONF_TOKEN]
+    )
+    try:
+        await client.login()
+    except WialonAuthError as err:
+        raise ConfigEntryAuthFailed(str(err)) from err
+    except (WialonConnectionError, WialonError) as err:
+        raise ConfigEntryNotReady(str(err)) from err
+
+    coordinator = WialonCoordinator(hass, entry, client)
+    await coordinator.async_config_entry_first_refresh()
+    entry.runtime_data = WialonData(client, coordinator)
+
+    selected = {str(u) for u in entry.options.get(CONF_UNITS, [])}
+    registry = dr.async_get(hass)
+    for device in dr.async_entries_for_config_entry(registry, entry.entry_id):
+        ids = {i[1] for i in device.identifiers if i[0] == DOMAIN}
+        if ids and not ids & selected:
+            registry.async_update_device(
+                device.id, remove_config_entry_id=entry.entry_id
+            )
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    return True
+
+
+async def _async_update_listener(hass: HomeAssistant, entry: WialonConfigEntry) -> None:
+    """Reload on options change."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: WialonConfigEntry) -> bool:
+    """Unload a config entry."""
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        await entry.runtime_data.client.logout()
+    return unloaded
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: WialonConfigEntry, device_entry: dr.DeviceEntry
+) -> bool:
+    """Allow removing devices of units that are no longer selected."""
+    selected = {str(u) for u in entry.options.get(CONF_UNITS, [])}
+    return not any(
+        domain == DOMAIN and ident in selected
+        for domain, ident in device_entry.identifiers
+    )

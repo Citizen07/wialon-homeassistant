@@ -1,0 +1,100 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Connect to Wialon",
+        "description": "Enter the web address you use to sign in to Wialon. The API address is detected automatically; fill it in only if detection fails.",
+        "data": {
+          "web_url": "Wialon web address",
+          "api_url": "API address (optional)"
+        },
+        "data_description": {
+          "web_url": "For example https://hosting.wialon.com",
+          "api_url": "Leave empty to detect it from the login page."
+        }
+      },
+      "auth": {
+        "title": "Sign in",
+        "description": "Choose how Home Assistant gets read-only access to your Wialon account.",
+        "menu_options": {
+          "oauth": "Sign in with Wialon",
+          "token": "Paste an access token"
+        }
+      },
+      "oauth": {
+        "title": "Sign in with Wialon",
+        "description": "Complete sign-in in the window that opened."
+      },
+      "token": {
+        "title": "Access token",
+        "description": "Paste a Wialon access token (72 characters).",
+        "data": {
+          "token": "Access token"
+        }
+      },
+      "units": {
+        "title": "Choose units",
+        "description": "Select the units to track.",
+        "data": {
+          "units": "Units"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign in again",
+        "description": "The Wialon access token no longer works. Sign in again with the same account.",
+        "menu_options": {
+          "oauth": "Sign in with Wialon",
+          "token": "Paste an access token"
+        }
+      }
+    },
+    "external_step": {
+      "description": "Complete sign-in in the window that opened."
+    },
+    "error": {
+      "not_wialon": "This address does not look like a Wialon server.",
+      "cannot_connect": "Failed to connect.",
+      "invalid_auth": "The access token was rejected.",
+      "no_units_selected": "Select at least one unit."
+    },
+    "abort": {
+      "already_configured": "This Wialon account is already configured.",
+      "reauth_successful": "Re-authentication was successful.",
+      "wrong_account": "The new token belongs to a different Wialon user.",
+      "oauth_failed": "Sign-in with Wialon failed.",
+      "no_units": "This account has no units.",
+      "no_url": "No Home Assistant URL is available for the sign-in redirect.",
+      "not_wialon": "This address does not look like a Wialon server.",
+      "cannot_connect": "Failed to connect.",
+      "invalid_auth": "The access token was rejected."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Wialon options",
+        "data": {
+          "units": "Units",
+          "scan_interval": "Update interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "no_units_selected": "Select at least one unit."
+    },
+    "abort": {
+      "cannot_connect": "Failed to connect.",
+      "invalid_auth": "The access token was rejected."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "speed": { "name": "Speed" },
+      "course": { "name": "Course" },
+      "altitude": { "name": "Altitude" },
+      "satellites": { "name": "Satellites" },
+      "last_message": { "name": "Last message" }
+    }
+  }
+}

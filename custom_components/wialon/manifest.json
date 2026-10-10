@@ -1,0 +1,11 @@
+{
+  "domain": "wialon",
+  "name": "Wialon",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["http"],
+  "documentation": "https://github.com/Citizen07/wialon-homeassistant",
+  "iot_class": "cloud_polling",
+  "requirements": [],
+  "version": "0.1.0"
+}
