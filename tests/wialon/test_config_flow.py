@@ -25,7 +25,9 @@ from custom_components.wialon.api import (  # noqa: E402
 )
 from custom_components.wialon.const import DOMAIN  # noqa: E402
 
-pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
+# The manifest depends on recorder (for the history import), so HA sets it up
+# before the flow; recorder_mock must come before hass.
+pytestmark = pytest.mark.usefixtures("recorder_mock", "enable_custom_integrations")
 
 API = "custom_components.wialon.config_flow"
 TOKEN = "T" * 72

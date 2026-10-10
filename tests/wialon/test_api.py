@@ -266,16 +266,11 @@ async def test_resolve_sdk_url_dead_falls_back_to_same_host(api, session, fake):
     assert await api.resolve_api_url(session, fake.origin) == fake.origin
 
 
-async def test_resolve_not_wialon(api, session):
-    other = FakeWialon()
-    other.api_enabled = False
-    other.html = "<html>some other site</html>"
-    server = await _serve(other)
-    try:
-        with pytest.raises(api.WialonNotWialonError):
-            await api.resolve_api_url(session, origin(server))
-    finally:
-        await server.close()
+async def test_resolve_not_wialon(api, session, fake):
+    fake.api_enabled = False
+    fake.html = "<html>some other site</html>"
+    with pytest.raises(api.WialonNotWialonError):
+        await api.resolve_api_url(session, fake.origin)
 
 
 async def test_resolve_other_json(api, session, fake):
@@ -284,9 +279,10 @@ async def test_resolve_other_json(api, session, fake):
         await api.resolve_api_url(session, fake.origin)
 
 
-async def test_resolve_unreachable(api, session):
+async def test_resolve_unreachable(api, session, fake):
+    await fake.server.close()  # nothing listens on the port any more
     with pytest.raises(api.WialonConnectionError):
-        await api.resolve_api_url(session, "http://127.0.0.1:9")
+        await api.resolve_api_url(session, fake.origin)
 
 
 # --- client ---------------------------------------------------------------
@@ -407,8 +403,9 @@ async def test_logout_ignores_errors(api, session, fake):
     await c.logout()  # must not raise
 
 
-async def test_connection_error(api, session):
-    c = api.WialonClient(session, "http://127.0.0.1:9", TOKEN)
+async def test_connection_error(api, session, fake):
+    await fake.server.close()  # nothing listens on the port any more
+    c = api.WialonClient(session, fake.origin, TOKEN)
     with pytest.raises(api.WialonConnectionError):
         await c.login()
 

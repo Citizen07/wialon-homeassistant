@@ -13,7 +13,7 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check tag matches manifest version
         run: |
           version=$(python3 -c "import json; print(json.load(open('custom_components/wialon/manifest.json'))['version'])")
@@ -21,6 +21,6 @@ jobs:
             echo "Tag ${GITHUB_REF_NAME} does not match manifest version v${version}" >&2
             exit 1
           fi
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true

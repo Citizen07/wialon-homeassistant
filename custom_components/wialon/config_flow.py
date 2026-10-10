@@ -219,7 +219,13 @@ class WialonConfigFlow(ConfigFlow, domain=DOMAIN):
                 ): TextSelector(),
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="user",
+            data_schema=schema,
+            errors=errors,
+            # hassfest rejects URLs inside translation strings.
+            description_placeholders={"example_url": DEFAULT_WEB_URLS[0]},
+        )
 
     # --- sign-in method menu -------------------------------------------
 

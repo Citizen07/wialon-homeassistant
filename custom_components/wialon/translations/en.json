@@ -10,7 +10,7 @@
           "api_url": "API address (optional)"
         },
         "data_description": {
-          "web_url": "For example https://hosting.wialon.com",
+          "web_url": "For example {example_url}",
           "api_url": "Leave empty to detect it from the login page."
         }
       },
