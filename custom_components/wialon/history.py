@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import math
 from typing import Any
 
 HOUR = 3600
@@ -15,6 +16,10 @@ MAX_CARRY = 24 * HOUR
 GLITCH_FRACTION = 0.01
 
 Sample = tuple[float, float]
+# A message whose value is "no reading" (e.g. coolant raw 0 while the CAN bus
+# sleeps). It ends the previous sample's hold, like HA's own "unknown" state,
+# and contributes nothing itself.
+NO_READING = float("nan")
 Row = dict[str, Any]
 
 
@@ -47,6 +52,10 @@ def extract_samples(
     return samples
 
 
+def _same(a: float, b: float) -> bool:
+    return a == b or (math.isnan(a) and math.isnan(b))
+
+
 def compact(
     samples: list[Sample], last: Sample | None = None, keep_every: float = HOUR
 ) -> list[Sample]:
@@ -60,7 +69,11 @@ def compact(
     """
     kept: list[Sample] = []
     for sample in samples:
-        if last is not None and sample[1] == last[1] and sample[0] - last[0] < keep_every:
+        if (
+            last is not None
+            and _same(sample[1], last[1])
+            and sample[0] - last[0] < keep_every
+        ):
             continue
         kept.append(sample)
         last = sample
@@ -86,6 +99,8 @@ def hourly_measurement(
     """
     acc: dict[int, list[float]] = {}  # hour -> [dur, weighted, min, max, n, sum]
     for i, (t0, v) in enumerate(samples):
+        if math.isnan(v):
+            continue  # ended the previous hold; holds nothing itself
         limit = t0 + MAX_CARRY
         if i + 1 < len(samples):
             t1 = min(samples[i + 1][0], limit)
@@ -124,6 +139,8 @@ def hourly_total(samples: list[Sample], end_ts: float | None = None) -> list[Row
     accepted: list[Sample] = []
     last: float | None = None
     for t, v in samples:
+        if math.isnan(v):
+            continue
         if last is not None and v < last - abs(last) * GLITCH_FRACTION:
             continue
         accepted.append((t, v))

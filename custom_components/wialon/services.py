@@ -29,6 +29,7 @@ from homeassistant.helpers.recorder import get_instance
 from .api import WialonError, parse_params, parse_position
 from .const import CONF_UNITS, DOMAIN
 from .history import (
+    NO_READING,
     Series,
     chain_sums,
     compact,
@@ -67,7 +68,10 @@ def _param_extractor(key: str) -> Callable[[dict], float | None]:
         value = parse_params(msg).get(key)
         if not _is_number(value):
             return None
-        return convert(resolved, value) if resolved else float(value)
+        if resolved is None:
+            return float(value)
+        converted = convert(resolved, value)
+        return NO_READING if converted is None else converted
 
     return _get
 

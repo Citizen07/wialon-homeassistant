@@ -318,7 +318,13 @@ def resolve(key: str) -> ResolvedParam | None:
 
 
 def convert(resolved: ResolvedParam, raw: Any) -> float | None:
-    """Apply multiplier and offset to a raw value; None when not numeric."""
+    """Apply multiplier and offset to a raw value; None when not numeric.
+
+    A raw 0 on an offset sensor is "no reading", not a value: coolant reads
+    raw 0 while the CAN bus sleeps, which would otherwise be -40 °C.
+    """
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    if raw == 0 and resolved.offset != 0:
         return None
     return raw * resolved.multiplier + resolved.offset

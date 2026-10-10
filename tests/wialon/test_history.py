@@ -148,3 +148,27 @@ def test_compact_keeps_one_per_interval_and_continues_chunks(history):
     assert first == [(0.0, 1.0)]
     second = history.compact([(H + 1.0, 1.0), (H + 60.0, 2.0)], first[-1])
     assert second == [(H + 1.0, 1.0), (H + 60.0, 2.0)]
+
+
+def test_no_reading_ends_hold_and_adds_nothing(history):
+    H = 3600
+    nan = history.NO_READING
+    # 90 °C at shutdown, then the CAN bus sleeps (raw 0 -> no reading) for 3 h.
+    samples = [(0.0, 90.0), (600.0, nan), (1200.0, nan), (3 * H + 600.0, 20.0)]
+    rows = history.hourly_measurement(samples, 4 * H)
+    by_hour = {int(r["start"].timestamp()) // H: r for r in rows}
+    assert by_hour[0]["mean"] == 90.0  # held only until the first no-reading
+    assert 1 not in by_hour and 2 not in by_hour
+    assert by_hour[3]["min"] == 20.0 and by_hour[3]["max"] == 20.0
+
+
+def test_compact_collapses_no_reading_runs(history):
+    nan = history.NO_READING
+    kept = history.compact([(0.0, nan), (60.0, nan), (120.0, 5.0)])
+    assert len(kept) == 2
+
+
+def test_total_ignores_no_reading(history):
+    nan = history.NO_READING
+    rows = history.hourly_total([(0.0, 10.0), (60.0, nan)], 120.0)
+    assert [r["state"] for r in rows] == [10.0]

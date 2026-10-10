@@ -285,3 +285,16 @@ def test_gsm_power_is_negative(params):
     res = params.resolve("sensor8197")
     assert res.unit == "dBm"
     assert params.convert(res, 65) == -65
+
+
+@pytest.mark.parametrize("key", ["engine_temp", "j1979_eng_temp", "sensor8200", "srv_dist"])
+def test_raw_zero_on_offset_sensor_is_no_reading(params, key):
+    res = params.resolve(key)
+    assert res.offset != 0
+    assert params.convert(res, 0) is None
+    assert params.convert(res, 0.0) is None
+
+
+def test_raw_zero_without_offset_is_a_value(params):
+    assert params.convert(params.resolve("sensor16387"), 0) == 0
+    assert params.convert(params.resolve("can_taho"), 0) == 0
