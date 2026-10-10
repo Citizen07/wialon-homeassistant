@@ -49,9 +49,6 @@
         }
       }
     },
-    "external_step": {
-      "description": "Complete sign-in in the window that opened."
-    },
     "error": {
       "not_wialon": "This address does not look like a Wialon server.",
       "cannot_connect": "Failed to connect.",

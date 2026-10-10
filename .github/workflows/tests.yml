@@ -1,0 +1,31 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest (HA ${{ matrix.ha }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Oldest supported release, matching hacs.json "homeassistant".
+          - ha: "2026.3"
+            phcc: "pytest-homeassistant-custom-component==0.13.320"
+          # Current release, as pinned in requirements_test.txt.
+          - ha: "current"
+            phcc: "-r requirements_test.txt"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install ${{ matrix.phcc }}
+      - run: pytest -v

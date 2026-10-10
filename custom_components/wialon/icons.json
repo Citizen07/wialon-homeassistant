@@ -1,0 +1,7 @@
+{
+  "services": {
+    "import_history": {
+      "service": "mdi:history"
+    }
+  }
+}
