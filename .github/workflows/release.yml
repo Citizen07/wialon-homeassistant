@@ -21,6 +21,6 @@ jobs:
             echo "Tag ${GITHUB_REF_NAME} does not match manifest version v${version}" >&2
             exit 1
           fi
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
