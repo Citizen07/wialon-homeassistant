@@ -32,7 +32,9 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          # The tail goes to the job summary, which is readable without signing in.
           pytest -v -rfE 2>&1 | tee pytest.log || status=$?
-          { echo '```'; tail -n 80 pytest.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          # Logs need a signed-in viewer; annotations do not, so repeat the
+          # tail of the output as one.
+          msg=$(tail -n 60 pytest.log | tr -d '\r' | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::notice title=pytest output (tail)::${msg}"
           exit ${status:-0}
