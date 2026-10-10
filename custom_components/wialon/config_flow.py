@@ -159,7 +159,7 @@ class WialonConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Wialon."""
 
     VERSION = 1
-    MINOR_VERSION = 2
+    MINOR_VERSION = 3
 
     def __init__(self) -> None:
         """Initialize."""

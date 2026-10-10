@@ -66,7 +66,7 @@ class WialonParamBinarySensor(WialonEntity, BinarySensorEntity):
         super().__init__(coordinator, unit_id, item)
         self._key = key
         self._resolved = resolved
-        self._attr_unique_id = f"{unit_id}_p_{key}"
+        self._attr_unique_id = f"{unit_id}_param_{key}"
         self._attr_name = resolved.name
         self._attr_entity_registry_enabled_default = resolved.enabled_default
         if resolved.binary_device_class:

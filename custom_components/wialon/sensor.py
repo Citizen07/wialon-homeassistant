@@ -161,7 +161,7 @@ class WialonParamSensor(WialonEntity, SensorEntity):
         super().__init__(coordinator, unit_id, item)
         self._key = key
         self._numeric = _is_number(sample)
-        self._attr_unique_id = f"{unit_id}_p_{key}"
+        self._attr_unique_id = f"{unit_id}_param_{key}"
         self._resolved = resolve(key)
         if self._resolved is not None:
             res = self._resolved

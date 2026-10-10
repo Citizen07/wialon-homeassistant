@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -29,14 +30,24 @@ class WialonData:
 type WialonConfigEntry = ConfigEntry[WialonData]
 
 
+_OLD_PARAM_UID = re.compile(r"^\d+_p_")
+
+
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Drop old raw parameter entities so they are recreated with new names."""
-    if entry.version == 1 and entry.minor_version < 2:
+    """Drop parameter entities from before the `_param_` unique_id scheme.
+
+    Minor 1 named them after the raw key. Removing them and reusing the same
+    unique_id (minor 2) does not help: HA restores a deleted entity's old
+    entity_id and disabled_by when its unique_id comes back. So minor 3 moved
+    the parameter entities to `{unit}_param_{key}` and drops every `{unit}_p_`
+    entry; they are recreated under the new ids with the current defaults.
+    """
+    if entry.version == 1 and entry.minor_version < 3:
         registry = er.async_get(hass)
         for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
-            if "_p_" in reg_entry.unique_id:
+            if _OLD_PARAM_UID.match(reg_entry.unique_id):
                 registry.async_remove(reg_entry.entity_id)
-        hass.config_entries.async_update_entry(entry, minor_version=2)
+        hass.config_entries.async_update_entry(entry, minor_version=3)
     return True
 
 
