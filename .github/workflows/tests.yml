@@ -28,4 +28,11 @@ jobs:
         with:
           python-version: "3.14"
       - run: pip install ${{ matrix.phcc }}
-      - run: pytest -v
+      - name: pytest
+        shell: bash
+        run: |
+          set -o pipefail
+          # The tail goes to the job summary, which is readable without signing in.
+          pytest -v -rfE 2>&1 | tee pytest.log || status=$?
+          { echo '```'; tail -n 80 pytest.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit ${status:-0}
