@@ -13,7 +13,9 @@ from aiohttp.test_utils import TestServer
 import pytest
 import pytest_asyncio
 
-pytestmark = pytest.mark.asyncio
+# The fake Wialon server listens on 127.0.0.1. Under
+# pytest-homeassistant-custom-component sockets are blocked unless enabled.
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("socket_enabled")]
 
 TOKEN = "T" * 72
 

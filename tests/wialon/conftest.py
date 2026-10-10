@@ -16,6 +16,15 @@ API_PATH = PACKAGE_DIR / "api.py"
 SCRIPT_PATH = ROOT / "scripts" / "gen_xirgo_sensors.py"
 STUB_PACKAGE = "wialon_pure"
 
+try:
+    import pytest_socket  # noqa: F401  (installed with PHCC; provides socket_enabled)
+except ImportError:
+
+    @pytest.fixture
+    def socket_enabled():
+        """Without pytest-socket nothing blocks sockets; keep the name usable."""
+        yield
+
 
 def _load_api():
     spec = importlib.util.spec_from_file_location("wialon_api_standalone", API_PATH)
