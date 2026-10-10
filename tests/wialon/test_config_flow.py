@@ -13,6 +13,7 @@ pytest.importorskip("pytest_homeassistant_custom_component")
 from homeassistant import config_entries  # noqa: E402
 from homeassistant.core import HomeAssistant  # noqa: E402
 from homeassistant.data_entry_flow import FlowResultType  # noqa: E402
+from homeassistant.helpers.network import NoURLAvailableError  # noqa: E402
 from homeassistant.setup import async_setup_component  # noqa: E402
 from pytest_homeassistant_custom_component.common import MockConfigEntry  # noqa: E402
 
@@ -101,9 +102,10 @@ async def test_user_explicit_api_url_probed(hass: HomeAssistant) -> None:
 async def test_token_path_creates_entry(
     hass: HomeAssistant, client_mock, resolve_mock
 ) -> None:
-    result = await _start(hass)
+    with patch(f"{API}.get_url", side_effect=NoURLAvailableError):
+        result = await _start(hass)
     assert result["type"] is FlowResultType.MENU
-    assert result["menu_options"] == ["token"]  # no HA URL configured -> no oauth
+    assert result["menu_options"] == ["token"]  # no HA URL -> no oauth
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {"next_step_id": "token"}
     )
@@ -204,10 +206,7 @@ async def test_oauth_flow_and_callback_view(
     resp = await http.get(f"/api/wialon/oauth/{flow_id}", params={"access_token": TOKEN})
     assert resp.status == 200
     assert "window.close()" in await resp.text()
-    assert (
-        hass.config_entries.flow.async_get(flow_id)["type"]
-        is FlowResultType.EXTERNAL_STEP_DONE
-    )
+    # Without the callback this would re-enter the oauth step instead.
     result = await hass.config_entries.flow.async_configure(flow_id)
     assert result["step_id"] == "units"
 
@@ -218,6 +217,12 @@ async def test_oauth_view_rejects_flow_not_waiting_for_oauth(
     await _with_url(hass)
     assert await async_setup_component(hass, "http", {})
     result = await _start(hass)  # sits at the sign-in menu, not at oauth
+    # A second flow reaching oauth registers the view (it is registered lazily).
+    other = await _start(hass)
+    other = await hass.config_entries.flow.async_configure(
+        other["flow_id"], {"next_step_id": "oauth"}
+    )
+    assert other["type"] is FlowResultType.EXTERNAL_STEP
     http = await hass_client_no_auth()
     resp = await http.get(
         f"/api/wialon/oauth/{result['flow_id']}", params={"access_token": TOKEN}
