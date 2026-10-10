@@ -47,6 +47,13 @@ def params():
 
 
 @pytest.fixture(scope="session")
+def history():
+    """The history module (pure aggregation)."""
+    _stub_package()
+    return importlib.import_module(f"{STUB_PACKAGE}.history")
+
+
+@pytest.fixture(scope="session")
 def xirgo():
     """The generated xirgo_sensors module."""
     _stub_package()

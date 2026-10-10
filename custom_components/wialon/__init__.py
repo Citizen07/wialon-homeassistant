@@ -9,12 +9,20 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import (
+    config_validation as cv,
+    device_registry as dr,
+    entity_registry as er,
+)
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.typing import ConfigType
 
 from .api import WialonAuthError, WialonClient, WialonConnectionError, WialonError
 from .const import CONF_API_URL, CONF_TOKEN, CONF_UNITS, DOMAIN
 from .coordinator import WialonCoordinator
+from .services import async_register_services
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.DEVICE_TRACKER, Platform.SENSOR]
 
@@ -31,6 +39,12 @@ type WialonConfigEntry = ConfigEntry[WialonData]
 
 
 _OLD_PARAM_UID = re.compile(r"^\d+_p_")
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register services."""
+    async_register_services(hass)
+    return True
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

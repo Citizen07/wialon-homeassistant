@@ -229,6 +229,9 @@ _DIAGNOSTIC_IDS = {7, 172, 8193, 8194, 8197, 8233, 8271, 8272, 12358}
 _DIAGNOSTIC_IDS |= {16490, 16491, 16492, 49177}
 _FIXED_SENSOR_DUPLICATES = {8192, 8193, 12299, 28675}
 _GENERIC_NAMES = {8194: "GNSS HDOP"}  # derived "GNSS H dop" reads badly
+# SENSOR_GSM_POWER is a u8 carrying the magnitude: the Volvo reported 65 for
+# what can only be -65 dBm (signal strength is never positive).
+_GENERIC_MULTIPLIERS = {8197: -1.0}
 
 
 def _resolve_generic(sensor_id: int) -> ResolvedParam | None:
@@ -253,6 +256,7 @@ def _resolve_generic(sensor_id: int) -> ResolvedParam | None:
             invert=sensor_id in _BINARY_INVERTED,
         )
     multiplier = float(1.0 if row.multiplier is None else row.multiplier)
+    multiplier *= _GENERIC_MULTIPLIERS.get(sensor_id, 1.0)
     offset = float(0.0 if row.offset is None else row.offset)
     unit = row.unit
     upper = row.name.upper()

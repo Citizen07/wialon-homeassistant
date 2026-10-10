@@ -1,0 +1,17 @@
+import_history:
+  fields:
+    device_id:
+      required: false
+      selector:
+        device:
+          integration: wialon
+          multiple: true
+    days:
+      required: false
+      default: 365
+      selector:
+        number:
+          min: 1
+          max: 366
+          step: 1
+          mode: box

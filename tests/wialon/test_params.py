@@ -279,3 +279,9 @@ def test_param_map_not_binary_or_generic(params):
     for key in params.PARAM_MAP:
         res = params.resolve(key)
         assert not res.is_binary and res.enabled_default and not res.diagnostic
+
+
+def test_gsm_power_is_negative(params):
+    res = params.resolve("sensor8197")
+    assert res.unit == "dBm"
+    assert params.convert(res, 65) == -65

@@ -195,18 +195,50 @@ class WialonClient:
             finally:
                 self._sid = None
 
+    async def _call_locked(self, svc: str, params: Any) -> Any:
+        """One call with relogin on an expired session; the lock must be held."""
+        if self._sid is None:
+            await self._login_locked()
+        result = await self._post(svc, params, self._sid)
+        if self._expired(result):
+            _LOGGER.debug("Wialon session expired, logging in again")
+            await self._login_locked()
+            result = await self._post(svc, params, self._sid)
+        if isinstance(result, dict) and "error" in result:
+            raise WialonError(f"{svc} failed", result["error"])
+        return result
+
     async def _call(self, svc: str, params: Any) -> Any:
         async with self._lock:
-            if self._sid is None:
-                await self._login_locked()
-            result = await self._post(svc, params, self._sid)
-            if self._expired(result):
-                _LOGGER.debug("Wialon session expired, logging in again")
-                await self._login_locked()
-                result = await self._post(svc, params, self._sid)
-            if isinstance(result, dict) and "error" in result:
-                raise WialonError(f"{svc} failed", result["error"])
-            return result
+            return await self._call_locked(svc, params)
+
+    async def load_messages(
+        self, unit_id: int, time_from: int, time_to: int
+    ) -> list[dict]:
+        """Load the data messages of a unit in [time_from, time_to] (UTC seconds).
+
+        The loaded message layer lives in the session, so load and unload run
+        under one lock hold; a concurrent poll never sees the half state.
+        """
+        async with self._lock:
+            result = await self._call_locked(
+                "messages/load_interval",
+                {
+                    "itemId": int(unit_id),
+                    "timeFrom": int(time_from),
+                    "timeTo": int(time_to),
+                    "flags": 0,
+                    "flagsMask": 0xFF00,
+                    "loadCount": 0xFFFFFFFF,
+                },
+            )
+            messages = result.get("messages") if isinstance(result, dict) else None
+            out = list(messages) if isinstance(messages, list) else []
+            try:
+                await self._call_locked("messages/unload", {})
+            except WialonError as err:
+                _LOGGER.debug("messages/unload failed: %s", err)
+            return out
 
     async def list_units(self) -> list[dict]:
         """Return raw avl_unit items visible to the token."""

@@ -3,7 +3,7 @@
   "name": "Wialon",
   "codeowners": [],
   "config_flow": true,
-  "dependencies": ["http"],
+  "dependencies": ["http", "recorder"],
   "documentation": "https://github.com/Citizen07/wialon-homeassistant",
   "iot_class": "cloud_polling",
   "requirements": [],

@@ -96,5 +96,21 @@
       "satellites": { "name": "Satellites" },
       "last_message": { "name": "Last message" }
     }
+  },
+  "services": {
+    "import_history": {
+      "name": "Import history",
+      "description": "Backfills hourly long-term statistics from the messages Wialon has stored, for the enabled numeric sensors of the selected units. Only hours before each sensor's first existing statistic are written. Binary sensors and the device tracker are not imported, because Home Assistant has no supported way to backfill states. Runs in the background and posts a notification when done.",
+      "fields": {
+        "device_id": {
+          "name": "Units",
+          "description": "Wialon units to import. Leave empty for all selected units."
+        },
+        "days": {
+          "name": "Days",
+          "description": "How many days back to import (1 to 366)."
+        }
+      }
+    }
   }
 }

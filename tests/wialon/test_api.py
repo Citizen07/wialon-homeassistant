@@ -41,6 +41,8 @@ class FakeWialon:
         self.api_enabled = True
         self.raw_body: str | None = None
         self.always_expired = False
+        self.messages: list[dict] = []
+        self.load_error: int | None = None
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -93,6 +95,17 @@ class FakeWialon:
                 self.batch_element_expired_once = False
                 out[0] = {"error": 1}
             return web.json_response(out)
+        if svc == "messages/load_interval":
+            if self.load_error is not None:
+                return web.json_response({"error": self.load_error})
+            msgs = [
+                m
+                for m in self.messages
+                if params["timeFrom"] <= m["t"] <= params["timeTo"]
+            ]
+            return web.json_response({"count": len(msgs), "messages": msgs})
+        if svc == "messages/unload":
+            return web.json_response({})
         return web.json_response({"error": 3})
 
     def _item(self, uid):
@@ -411,3 +424,56 @@ async def test_parse_position_from_unit_item(api):
     item = {"lmsg": {"t": 2, "pos": None}, "pos": {"y": 54.9, "x": 23.9, "sc": 0}}
     assert api.parse_position(item["lmsg"]) is None
     assert api.parse_position(item)["latitude"] == 54.9
+
+
+# --- load_messages ------------------------------------------------------
+
+
+async def test_load_messages_loads_then_unloads(api, client, fake):
+    fake.messages = [{"t": 100, "p": {"a": 1}}, {"t": 200}, {"t": 900}]
+    result = await client.load_messages(1, 50, 300)
+    assert [m["t"] for m in result] == [100, 200]
+    svcs = [c[0] for c in fake.calls if c[0].startswith("messages/")]
+    assert svcs == ["messages/load_interval", "messages/unload"]
+    params = next(c[1] for c in fake.calls if c[0] == "messages/load_interval")
+    assert params == {
+        "itemId": 1,
+        "timeFrom": 50,
+        "timeTo": 300,
+        "flags": 0,
+        "flagsMask": 0xFF00,
+        "loadCount": 0xFFFFFFFF,
+    }
+
+
+async def test_load_messages_error(api, client, fake):
+    fake.load_error = 6
+    with pytest.raises(api.WialonError) as err:
+        await client.load_messages(1, 0, 10)
+    assert err.value.code == 6
+    assert not [c for c in fake.calls if c[0] == "messages/unload"]
+
+
+async def test_load_messages_relogin_covers_pair(api, client, fake):
+    fake.messages = [{"t": 5}]
+    await client.login()
+    fake.expire()
+    assert [m["t"] for m in await client.load_messages(1, 0, 10)] == [5]
+    assert fake.logins == 2
+    unload = [c for c in fake.calls if c[0] == "messages/unload"]
+    assert len(unload) == 1 and unload[0][2] == fake.sid
+
+
+async def test_load_messages_holds_lock_for_pair(api, client, fake):
+    fake.messages = [{"t": 5}]
+    await client.login()
+    await asyncio.gather(
+        client.load_messages(1, 0, 10),
+        client.load_messages(2, 0, 10),
+        client.list_units(),
+    )
+    svcs = [c[0] for c in fake.calls if c[0] != "token/login"]
+    i = svcs.index("messages/load_interval")
+    assert svcs[i + 1] == "messages/unload"
+    j = svcs.index("messages/load_interval", i + 1)
+    assert svcs[j + 1] == "messages/unload"
