@@ -203,3 +203,79 @@ def test_precision_overrides(params):
     assert params.resolve("can_taho").precision == 0
     assert params.resolve("j1979_rpm").precision == 0
     assert params.resolve("can_mileage").precision == 1
+
+
+def test_generic_distance_total(params):
+    res = params.resolve("sensor16387")
+    assert params.convert(res, 49937800) == pytest.approx(249689.0)
+    assert (res.unit, res.device_class, res.state_class) == (
+        "km",
+        "distance",
+        "total_increasing",
+    )
+    assert res.enabled_default and not res.diagnostic and not res.is_binary
+
+
+def test_generic_engine_temp(params):
+    res = params.resolve("sensor8200")
+    assert params.convert(res, 40) == 0
+    assert (res.unit, res.device_class) == ("°C", "temperature")
+
+
+def test_generic_hdop_diagnostic(params):
+    res = params.resolve("sensor8194")
+    assert params.convert(res, 6) == pytest.approx(0.6)
+    assert res.diagnostic and res.name == "GNSS HDOP"
+
+
+def test_generic_voltage(params):
+    res = params.resolve("sensor12288")
+    assert (res.unit, res.device_class, res.enabled_default) == ("mV", "voltage", True)
+
+
+def test_generic_duplicate_of_fixed_sensor(params):
+    for sensor_id in (8192, 8193, 12299, 28675):
+        assert not params.resolve(f"sensor{sensor_id}").enabled_default
+
+
+def test_generic_user_defined(params):
+    res = params.resolve("sensor28676")
+    assert not res.enabled_default
+    assert (res.multiplier, res.offset) == (1.0, 0.0)
+
+
+def test_generic_timestamp(params):
+    res = params.resolve("sensor16492")
+    assert res.unit == "s" and res.state_class is None
+    assert not res.enabled_default and res.diagnostic
+
+
+def test_generic_string_sensor_is_diagnostic_and_off(params):
+    res = params.resolve("sensor49177")
+    assert res.diagnostic and not res.enabled_default
+
+
+def test_binary_lock(params):
+    res = params.resolve("sensor97")
+    assert res.is_binary and res.binary_device_class == "lock"
+    assert res.invert and res.enabled_default
+
+
+def test_binary_door_light_diag(params):
+    door = params.resolve("sensor98")
+    assert door.binary_device_class == "door" and door.name == "Doors F L"
+    light = params.resolve("sensor135")
+    assert light.binary_device_class == "light" and not light.enabled_default
+    seven = params.resolve("sensor7")
+    assert seven.is_binary and seven.diagnostic and not seven.enabled_default
+
+
+@pytest.mark.parametrize("key", ["sensor99999", "hdop", "sensor", "sensorx1"])
+def test_generic_unresolved(params, key):
+    assert params.resolve(key) is None
+
+
+def test_param_map_not_binary_or_generic(params):
+    for key in params.PARAM_MAP:
+        res = params.resolve(key)
+        assert not res.is_binary and res.enabled_default and not res.diagnostic

@@ -137,8 +137,13 @@ class ResolvedParam:
     offset: float
     unit: str | None
     device_class: str | None
-    state_class: str
+    state_class: str | None
     precision: int
+    enabled_default: bool = True
+    diagnostic: bool = False
+    is_binary: bool = False
+    binary_device_class: str | None = None
+    invert: bool = False
 
 
 def _split_token(token: str) -> list[str]:
@@ -167,7 +172,7 @@ def _derive_name(sensor_name: str, alt_name: str | None) -> str:
             out.append("AdBlue")
         elif upper in ("1979", "J1979"):
             out.append("J1979")
-        elif upper in ACRONYMS:
+        elif upper in ACRONYMS or (len(word) == 1 and word.isalpha()):
             out.append(upper)
         else:
             out.append(word.lower())
@@ -191,11 +196,97 @@ def _precision(multiplier: float, offset: float) -> int:
     return max(1, min(3, math.ceil(-math.log10(abs(multiplier)))))
 
 
+_SENSOR_KEY_RE = re.compile(r"^sensor(\d+)$")
+
+_UNIT_DEVICE_CLASS = {
+    "°C": "temperature",
+    "km": "distance",
+    "m": "distance",
+    "km/h": "speed",
+    "L": "volume",
+    "h": "duration",
+    "kg": "weight",
+    "mV": "voltage",
+    "V": "voltage",
+    "kPa": "pressure",
+    "dBm": "signal_strength",
+    "L/h": "volume_flow_rate",
+}
+
+BINARY_ID_LIMIT = 8192  # Xirgo IDs below this are boolean sensors
+_BINARY_CLASS = {
+    **dict.fromkeys((98, 99, 100, 101), "door"),
+    **dict.fromkeys((102, 103), "opening"),
+    97: "lock",
+    2: "moving",
+    142: "running",
+    109: "power",
+    **dict.fromkeys((135, 136, 137), "light"),
+}
+_BINARY_INVERTED = {97}  # HA lock class: on = unlocked
+_BINARY_ENABLED = {2, 96, 97, 98, 99, 100, 101, 102, 103, 109, 142}
+_DIAGNOSTIC_IDS = {7, 172, 8193, 8194, 8197, 8233, 8271, 8272, 12358}
+_DIAGNOSTIC_IDS |= {16490, 16491, 16492, 49177}
+_FIXED_SENSOR_DUPLICATES = {8192, 8193, 12299, 28675}
+_GENERIC_NAMES = {8194: "GNSS HDOP"}  # derived "GNSS H dop" reads badly
+
+
+def _resolve_generic(sensor_id: int) -> ResolvedParam | None:
+    row = XIRGO_SENSORS.get(sensor_id)
+    if row is None:
+        return None
+    name = _GENERIC_NAMES.get(sensor_id) or _derive_name(row.name, row.alt_name)
+    diagnostic = sensor_id in _DIAGNOSTIC_IDS
+    if sensor_id < BINARY_ID_LIMIT:
+        return ResolvedParam(
+            name=name,
+            multiplier=1.0,
+            offset=0.0,
+            unit=None,
+            device_class=None,
+            state_class=None,
+            precision=0,
+            enabled_default=sensor_id in _BINARY_ENABLED,
+            diagnostic=diagnostic,
+            is_binary=True,
+            binary_device_class=_BINARY_CLASS.get(sensor_id),
+            invert=sensor_id in _BINARY_INVERTED,
+        )
+    multiplier = float(1.0 if row.multiplier is None else row.multiplier)
+    offset = float(0.0 if row.offset is None else row.offset)
+    unit = row.unit
+    upper = row.name.upper()
+    if unit == "s":
+        state_class = None
+    elif "TOTAL" in upper or "ODOMETER" in upper:
+        state_class = "total_increasing"
+    else:
+        state_class = "measurement"
+    enabled = (
+        bool(unit)
+        and unit != "s"
+        and "_USER_DEFINED_" not in upper
+        and sensor_id not in _FIXED_SENSOR_DUPLICATES
+    )
+    return ResolvedParam(
+        name=name,
+        multiplier=multiplier,
+        offset=offset,
+        unit=unit,
+        device_class=_UNIT_DEVICE_CLASS.get(unit) if unit else None,
+        state_class=state_class,
+        precision=_precision(multiplier, offset),
+        enabled_default=enabled,
+        diagnostic=diagnostic,
+    )
+
+
 def resolve(key: str) -> ResolvedParam | None:
     """Resolve a Wialon parameter key, or None when it is not mapped."""
     spec = PARAM_MAP.get(key)
     if spec is None:
-        return None
+        match = _SENSOR_KEY_RE.match(key)
+        return _resolve_generic(int(match.group(1))) if match else None
     row = XIRGO_SENSORS.get(spec.sensor_id)
     if row is None:
         return None

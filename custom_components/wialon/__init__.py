@@ -8,14 +8,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import WialonAuthError, WialonClient, WialonConnectionError, WialonError
 from .const import CONF_API_URL, CONF_TOKEN, CONF_UNITS, DOMAIN
 from .coordinator import WialonCoordinator
 
-PLATFORMS = [Platform.DEVICE_TRACKER, Platform.SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.DEVICE_TRACKER, Platform.SENSOR]
 
 
 @dataclass
@@ -27,6 +27,17 @@ class WialonData:
 
 
 type WialonConfigEntry = ConfigEntry[WialonData]
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Drop old raw parameter entities so they are recreated with new names."""
+    if entry.version == 1 and entry.minor_version < 2:
+        registry = er.async_get(hass)
+        for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+            if "_p_" in reg_entry.unique_id:
+                registry.async_remove(reg_entry.entity_id)
+        hass.config_entries.async_update_entry(entry, minor_version=2)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: WialonConfigEntry) -> bool:

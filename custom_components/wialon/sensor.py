@@ -109,6 +109,9 @@ async def async_setup_entry(
             keys = param_keys.setdefault(unit_id, set())
             for key, value in parse_params(item.get("lmsg")).items():
                 if key not in keys:
+                    resolved = resolve(key)
+                    if resolved is not None and resolved.is_binary:
+                        continue  # handled by the binary_sensor platform
                     keys.add(key)
                     new.append(
                         WialonParamSensor(coordinator, unit_id, item, key, value)
@@ -163,12 +166,16 @@ class WialonParamSensor(WialonEntity, SensorEntity):
         if self._resolved is not None:
             res = self._resolved
             self._attr_name = res.name
-            self._attr_native_unit_of_measurement = res.unit
-            if res.device_class:
-                self._attr_device_class = SensorDeviceClass(res.device_class)
-            self._attr_state_class = SensorStateClass(res.state_class)
-            self._attr_suggested_display_precision = res.precision
-            self._attr_entity_registry_enabled_default = True
+            self._attr_entity_registry_enabled_default = res.enabled_default
+            if res.diagnostic:
+                self._attr_entity_category = EntityCategory.DIAGNOSTIC
+            if self._numeric:
+                self._attr_native_unit_of_measurement = res.unit
+                if res.device_class:
+                    self._attr_device_class = SensorDeviceClass(res.device_class)
+                if res.state_class:
+                    self._attr_state_class = SensorStateClass(res.state_class)
+                self._attr_suggested_display_precision = res.precision
             return
         self._attr_name = key
         self._attr_entity_registry_enabled_default = False
@@ -182,7 +189,11 @@ class WialonParamSensor(WialonEntity, SensorEntity):
         if value is None:
             return None
         if self._resolved is not None:
-            return convert(self._resolved, value)
+            if _is_number(value):
+                return convert(self._resolved, value) if self._numeric else None
+            if isinstance(value, str) and not self._numeric:
+                return value[:MAX_STATE_LENGTH]
+            return None
         if self._numeric:
             return value if _is_number(value) else None
         return str(value)[:MAX_STATE_LENGTH]
