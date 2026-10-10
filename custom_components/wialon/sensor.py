@@ -18,9 +18,9 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import WialonConfigEntry
 from .api import message_time, parse_params, parse_position
-from .const import DEFAULT_ENABLED_PARAMS
 from .coordinator import WialonCoordinator
 from .entity import WialonEntity
+from .params import convert, resolve
 
 MAX_STATE_LENGTH = 255
 
@@ -144,7 +144,7 @@ class WialonSensor(WialonEntity, SensorEntity):
 
 
 class WialonParamSensor(WialonEntity, SensorEntity):
-    """Sensor for one raw device parameter."""
+    """Sensor for one device parameter, converted when its key is mapped."""
 
     def __init__(
         self,
@@ -159,17 +159,30 @@ class WialonParamSensor(WialonEntity, SensorEntity):
         self._key = key
         self._numeric = _is_number(sample)
         self._attr_unique_id = f"{unit_id}_p_{key}"
+        self._resolved = resolve(key)
+        if self._resolved is not None:
+            res = self._resolved
+            self._attr_name = res.name
+            self._attr_native_unit_of_measurement = res.unit
+            if res.device_class:
+                self._attr_device_class = SensorDeviceClass(res.device_class)
+            self._attr_state_class = SensorStateClass(res.state_class)
+            self._attr_suggested_display_precision = res.precision
+            self._attr_entity_registry_enabled_default = True
+            return
         self._attr_name = key
-        self._attr_entity_registry_enabled_default = key in DEFAULT_ENABLED_PARAMS
+        self._attr_entity_registry_enabled_default = False
         if self._numeric:
             self._attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
     def native_value(self) -> Any:
-        """Raw parameter value; None when absent or of a different type."""
+        """Converted (mapped) or raw parameter value; None when unusable."""
         value = parse_params(self.lmsg).get(self._key)
         if value is None:
             return None
+        if self._resolved is not None:
+            return convert(self._resolved, value)
         if self._numeric:
             return value if _is_number(value) else None
         return str(value)[:MAX_STATE_LENGTH]
