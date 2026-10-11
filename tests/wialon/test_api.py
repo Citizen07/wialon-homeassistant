@@ -558,3 +558,54 @@ async def test_load_messages_holds_lock_for_pair(api, client, fake):
     assert svcs[i + 1] == "messages/unload"
     j = svcs.index("messages/load_interval", i + 1)
     assert svcs[j + 1] == "messages/unload"
+
+
+# --- message window -----------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("prev_t", "new_t", "action"),
+    [
+        (None, 1000, "none"),
+        (1000, 1000, "none"),
+        (1000, 900, "none"),
+        (1000, None, "none"),
+        (1000, 1060, "fetch"),
+        (1000, 1000 + 6 * 3600, "fetch"),
+        (1000, 1001 + 6 * 3600, "drop"),
+    ],
+)
+async def test_window_action(api, prev_t, new_t, action):
+    assert api.window_action(prev_t, new_t) == action
+
+
+async def test_build_window_collects_values_in_time_order(api):
+    window = api.build_window(
+        [
+            {"t": 120, "p": {"a": 3, "b": 1.5}},
+            {"t": 60, "p": {"a": 1}},
+            {"t": 90, "p": {"a": 2, "s": "x"}},
+        ]
+    )
+    assert window.count == 3
+    assert window.time_from == datetime.fromtimestamp(60, UTC)
+    assert window.time_to == datetime.fromtimestamp(120, UTC)
+    assert window.params == {"a": [1, 2, 3], "b": [1.5], "s": ["x"]}
+
+
+async def test_build_window_skips_structured_and_null_values(api):
+    window = api.build_window(
+        [{"t": 1, "p": {"posinfo": {"x": 1}, "l": [1], "n": None, "v": 2}}]
+    )
+    assert window.params == {"v": [2]}
+
+
+async def test_build_window_without_params(api):
+    window = api.build_window([{"t": 5}, {"t": 6, "p": "bad"}])
+    assert window.count == 2 and window.params == {}
+
+
+async def test_build_window_empty_and_bad_timestamps(api):
+    assert api.build_window([]) is None
+    assert api.build_window([{"t": None}, {"t": "x"}, {"t": True}, 5]) is None
+    window = api.build_window([{"t": "x", "p": {"a": 1}}, {"t": 10, "p": {"a": 2}}])
+    assert window.count == 1 and window.params == {"a": [2]}

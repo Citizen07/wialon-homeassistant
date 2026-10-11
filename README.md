@@ -85,6 +85,18 @@ Per unit:
   across messages that omit the parameter, and stays until Wialon's stored
   value changes. The `last_changed` attribute tells when the tracker last
   changed it; the `Last message` sensor tells how fresh the unit's data is.
+- **Message window.** A poll only sees the latest state, but trackers send far
+  more often while driving. When a unit has new messages, each poll makes one
+  extra `messages/load_interval` call for the messages since the previous poll,
+  and numeric parameter sensors get the attributes `window_min`, `window_max`
+  (after conversion) and `window_to` (the time of the window's last message).
+  They change only when a new window arrives, so a parked car writes no extra
+  states. There is no window on the first poll after a start, and none after a
+  gap of more than 6 hours (for example, Home Assistant was down); the
+  attributes are then absent. Binary sensors and the fixed sensors have none.
+- **Eco-driving sensors.** `wln_accel_max`, `wln_brk_max` and `wln_crn_max` are
+  computed by the Wialon server (maximum acceleration, braking and cornering,
+  in g) and appear as regular sensors when the unit reports them.
 - Unmapped, duplicate and user-defined parameters are created disabled. Enable
   them in the entity settings if you need them.
 

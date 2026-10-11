@@ -26,7 +26,7 @@ from .api import (
 )
 from .coordinator import WialonCoordinator
 from .entity import WialonEntity
-from .params import convert, resolve
+from .params import convert, resolve, window_extremes
 
 MAX_STATE_LENGTH = 255
 
@@ -194,9 +194,21 @@ class WialonParamSensor(WialonEntity, SensorEntity):
         return parse_param_store(self.unit).get(self._key)
 
     @property
-    def extra_state_attributes(self) -> dict[str, str | None]:
-        """When the tracker last changed the parameter."""
-        return param_attributes(self._param)
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Change time, plus the extremes of the latest message window."""
+        attrs: dict[str, Any] = param_attributes(self._param)
+        window = self.coordinator.windows.get(self.unit_id)
+        if window is None or not self._numeric:
+            return attrs
+        extremes = window_extremes(
+            self._resolved,
+            window.params.get(self._key, []),
+            self._attr_suggested_display_precision,
+        )
+        if extremes is not None:
+            attrs["window_min"], attrs["window_max"] = extremes
+            attrs["window_to"] = window.time_to.isoformat()
+        return attrs
 
     @property
     def native_value(self) -> Any:

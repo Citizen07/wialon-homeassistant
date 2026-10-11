@@ -389,3 +389,60 @@ def param_attributes(param: ParamValue | None) -> dict[str, str | None]:
     """
     changed = param.changed if param else None
     return {"last_changed": changed.isoformat() if changed else None}
+
+
+# Longest span of messages fetched in one poll; a bigger gap (HA was down)
+# is skipped rather than loaded.
+MAX_WINDOW = 6 * 3600
+
+WINDOW_NONE = "none"  # nothing new: keep the previous window
+WINDOW_FETCH = "fetch"  # load the messages since the previous poll
+WINDOW_DROP = "drop"  # gap too large: no window
+
+
+@dataclass(frozen=True)
+class MessageWindow:
+    """Raw parameter values of every message since the previous poll."""
+
+    time_from: datetime
+    time_to: datetime
+    count: int
+    params: dict[str, list[Any]]
+
+
+def window_action(prev_t: int | None, new_t: Any) -> str:
+    """Decide what a poll does about the message window.
+
+    `prev_t` is the last message time seen on the previous poll (None on the
+    first), `new_t` the time of the latest message now.
+    """
+    if isinstance(new_t, bool) or not isinstance(new_t, (int, float)):
+        return WINDOW_NONE
+    if prev_t is None or new_t <= prev_t:
+        return WINDOW_NONE
+    return WINDOW_FETCH if new_t - prev_t <= MAX_WINDOW else WINDOW_DROP
+
+
+def build_window(messages: list[dict]) -> MessageWindow | None:
+    """Build a window from loaded messages, None when none has a valid time.
+
+    Values are kept raw and in time order; structured values (dict, list) are
+    skipped like in the parameter store.
+    """
+    dated: list[tuple[datetime, dict]] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        when = _to_datetime(msg.get("t"))
+        if when is not None:
+            dated.append((when, msg))
+    if not dated:
+        return None
+    dated.sort(key=lambda pair: pair[0])
+    params: dict[str, list[Any]] = {}
+    for _, msg in dated:
+        for key, value in parse_params(msg).items():
+            if value is None or isinstance(value, (dict, list)):
+                continue
+            params.setdefault(key, []).append(value)
+    return MessageWindow(dated[0][0], dated[-1][0], len(dated), params)

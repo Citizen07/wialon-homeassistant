@@ -38,7 +38,7 @@ _WORD_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+")
 class ParamSpec:
     """Mapping of a Wialon parameter key to a Xirgo sensor, with overrides."""
 
-    sensor_id: int
+    sensor_id: int | None
     multiplier: float | None = None
     offset: float | None = None
     unit: str | None = None
@@ -46,11 +46,12 @@ class ParamSpec:
     precision: int | None = None
     device_class: str | None = None
     state_class: str = "measurement"
-    source: str = "xirgo"
+    source: str = "xirgo"  # "wialon": computed by the server, no Xirgo row
 
 
 _TOTAL = "total_increasing"
 _J1979 = "sae_j1979"
+_WIALON = "wialon"
 
 PARAM_MAP: dict[str, ParamSpec] = {
     # J1939 (Xirgo table)
@@ -125,6 +126,16 @@ PARAM_MAP: dict[str, ParamSpec] = {
     "j1979_rpm": ParamSpec(12347, precision=0),
     "j1979_flrate": ParamSpec(12349, device_class="volume_flow_rate"),
     "j1979_maf": ParamSpec(12348),
+    # Eco-driving values computed by the Wialon server, not Xirgo sensors
+    "wln_accel_max": ParamSpec(
+        None, unit="g", name="Eco-driving max acceleration", precision=3, source=_WIALON
+    ),
+    "wln_brk_max": ParamSpec(
+        None, unit="g", name="Eco-driving max braking", precision=3, source=_WIALON
+    ),
+    "wln_crn_max": ParamSpec(
+        None, unit="g", name="Eco-driving max cornering", precision=3, source=_WIALON
+    ),
 }
 
 
@@ -291,6 +302,16 @@ def resolve(key: str) -> ResolvedParam | None:
     if spec is None:
         match = _SENSOR_KEY_RE.match(key)
         return _resolve_generic(int(match.group(1))) if match else None
+    if spec.sensor_id is None:
+        return ResolvedParam(
+            name=spec.name or key,
+            multiplier=1.0 if spec.multiplier is None else float(spec.multiplier),
+            offset=0.0 if spec.offset is None else float(spec.offset),
+            unit=spec.unit,
+            device_class=spec.device_class,
+            state_class=spec.state_class,
+            precision=0 if spec.precision is None else spec.precision,
+        )
     row = XIRGO_SENSORS.get(spec.sensor_id)
     if row is None:
         return None
@@ -328,3 +349,29 @@ def convert(resolved: ResolvedParam, raw: Any) -> float | None:
     if raw == 0 and resolved.offset != 0:
         return None
     return raw * resolved.multiplier + resolved.offset
+
+
+def window_extremes(
+    resolved: ResolvedParam | None, values: list[Any], precision: int | None = None
+) -> tuple[float, float] | None:
+    """Min and max of a window's raw values, converted when the key is mapped.
+
+    Values that are not numbers or mean "no reading" are left out; None when
+    nothing usable remains.
+    """
+    out: list[float] = []
+    for raw in values:
+        if resolved is not None:
+            value = convert(resolved, raw)
+        elif isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            value = None
+        else:
+            value = raw
+        if value is not None:
+            out.append(value)
+    if not out:
+        return None
+    low, high = min(out), max(out)
+    if precision is not None:
+        low, high = round(low, precision), round(high, precision)
+    return low, high

@@ -32,6 +32,9 @@ XIRGO_EXPECTED = {
 
 def test_param_map_ids_exist(params, xirgo):
     for key, spec in params.PARAM_MAP.items():
+        if spec.source == "wialon":
+            assert spec.sensor_id is None, key
+            continue
         assert spec.sensor_id in xirgo.XIRGO_SENSORS, key
 
 
@@ -298,3 +301,28 @@ def test_raw_zero_on_offset_sensor_is_no_reading(params, key):
 def test_raw_zero_without_offset_is_a_value(params):
     assert params.convert(params.resolve("sensor16387"), 0) == 0
     assert params.convert(params.resolve("can_taho"), 0) == 0
+
+
+@pytest.mark.parametrize(
+    ("key", "name"),
+    [
+        ("wln_accel_max", "Eco-driving max acceleration"),
+        ("wln_brk_max", "Eco-driving max braking"),
+        ("wln_crn_max", "Eco-driving max cornering"),
+    ],
+)
+def test_wialon_eco_driving_standalone(params, key, name):
+    res = params.resolve(key)
+    assert res.name == name
+    assert (res.multiplier, res.offset, res.unit, res.precision) == (1.0, 0.0, "g", 3)
+    assert res.state_class == "measurement"
+    assert res.enabled_default and not res.is_binary and not res.diagnostic
+    assert params.convert(res, 0) == 0
+    assert params.convert(res, 0.25) == 0.25
+
+
+def test_standalone_spec_defaults(params, monkeypatch):
+    monkeypatch.setitem(params.PARAM_MAP, "x", params.ParamSpec(None, source="wialon"))
+    res = params.resolve("x")
+    assert (res.name, res.multiplier, res.offset, res.unit) == ("x", 1.0, 0.0, None)
+    assert res.precision == 0
