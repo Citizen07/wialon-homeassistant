@@ -104,7 +104,8 @@ def test_chain_sums_with_anchor(history):
 
 def test_chain_sums_without_anchor(history):
     rows = [{"start": 1, "state": 90.0}, {"start": 2, "state": 100.0}]
-    assert [r["sum"] for r in history.chain_sums(rows, None)] == [0.0, 10.0]
+    # Ends at 0, where the recorder's own first sum will start.
+    assert [r["sum"] for r in history.chain_sums(rows, None)] == [-10.0, 0.0]
 
 
 def test_rows_before_cutoff(history):
