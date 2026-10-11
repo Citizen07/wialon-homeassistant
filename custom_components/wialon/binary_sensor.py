@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import WialonConfigEntry
-from .api import parse_params
+from .api import ParamValue, param_attributes, parse_param_store
 from .coordinator import WialonCoordinator
 from .entity import WialonEntity
 from .params import ResolvedParam, resolve
@@ -34,7 +34,7 @@ async def async_setup_entry(
             if item is None:
                 continue
             keys = param_keys.setdefault(unit_id, set())
-            for key in parse_params(item.get("lmsg")):
+            for key in parse_param_store(item):
                 if key in keys:
                     continue
                 resolved = resolve(key)
@@ -77,9 +77,20 @@ class WialonParamBinarySensor(WialonEntity, BinarySensorEntity):
             self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
+    def _param(self) -> ParamValue | None:
+        """The parameter from the unit's accumulated store."""
+        return parse_param_store(self.unit).get(self._key)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | None]:
+        """When the tracker last changed the parameter."""
+        return param_attributes(self._param)
+
+    @property
     def is_on(self) -> bool | None:
-        """State from the latest message; None when absent or not numeric."""
-        value: Any = parse_params(self.lmsg).get(self._key)
+        """Stored state; None when absent or not numeric."""
+        param = self._param
+        value: Any = param.value if param else None
         if value is None or not isinstance(value, (bool, int, float)):
             return None
         return bool(value) != self._resolved.invert

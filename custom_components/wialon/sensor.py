@@ -17,7 +17,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import WialonConfigEntry
-from .api import message_time, parse_params, parse_position
+from .api import (
+    ParamValue,
+    message_time,
+    param_attributes,
+    parse_param_store,
+    parse_position,
+)
 from .coordinator import WialonCoordinator
 from .entity import WialonEntity
 from .params import convert, resolve
@@ -107,14 +113,14 @@ async def async_setup_entry(
                     WialonSensor(coordinator, unit_id, item, desc) for desc in SENSORS
                 )
             keys = param_keys.setdefault(unit_id, set())
-            for key, value in parse_params(item.get("lmsg")).items():
+            for key, param in parse_param_store(item).items():
                 if key not in keys:
                     resolved = resolve(key)
                     if resolved is not None and resolved.is_binary:
                         continue  # handled by the binary_sensor platform
                     keys.add(key)
                     new.append(
-                        WialonParamSensor(coordinator, unit_id, item, key, value)
+                        WialonParamSensor(coordinator, unit_id, item, key, param.value)
                     )
         if new:
             async_add_entities(new)
@@ -183,9 +189,20 @@ class WialonParamSensor(WialonEntity, SensorEntity):
             self._attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
+    def _param(self) -> ParamValue | None:
+        """The parameter from the unit's accumulated store."""
+        return parse_param_store(self.unit).get(self._key)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | None]:
+        """When the tracker last changed the parameter."""
+        return param_attributes(self._param)
+
+    @property
     def native_value(self) -> Any:
         """Converted (mapped) or raw parameter value; None when unusable."""
-        value = parse_params(self.lmsg).get(self._key)
+        param = self._param
+        value = param.value if param else None
         if value is None:
             return None
         if self._resolved is not None:

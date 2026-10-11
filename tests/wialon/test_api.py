@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 import json
+import logging
 from urllib.parse import parse_qs, urlsplit
 
 import aiohttp
@@ -224,6 +225,86 @@ async def test_parse_helpers_missing(api):
     assert api.message_time({"pos": None}) is None
 
 
+def _dt(t):
+    return datetime.fromtimestamp(t, UTC)
+
+
+async def test_param_store_from_prms(api):
+    item = {
+        "lmsg": {"t": 300, "p": {"a": 1}},
+        "prms": {"a": {"v": 1, "ct": 100, "at": 300}, "b": {"v": "x", "ct": 50, "at": 60}},
+    }
+    store = api.parse_param_store(item)
+    assert store["a"] == api.ParamValue(1, _dt(100), _dt(300))
+    assert store["b"] == api.ParamValue("x", _dt(50), _dt(60))
+
+
+async def test_param_store_skips_malformed(api):
+    item = {"prms": {"a": 5, "b": {"ct": 1}, "c": None, "d": {"v": 0, "ct": 1, "at": 2}}}
+    assert list(api.parse_param_store(item)) == ["d"]
+
+
+async def test_param_store_skips_structured_values(api, caplog):
+    caplog.set_level(logging.DEBUG, logger=api.__name__)
+    api._skipped_structured.clear()
+    item = {
+        "prms": {
+            "posinfo": {"v": {"x": 1.0, "y": 2.0}, "ct": 1, "at": 2},
+            "list": {"v": [1, 2], "ct": 1, "at": 2},
+            "a": {"v": 3, "ct": 1, "at": 2},
+        }
+    }
+    assert list(api.parse_param_store(item)) == ["a"]
+    api.parse_param_store(item)
+    logged = [r.getMessage() for r in caplog.records if "structured" in r.getMessage()]
+    assert sorted(logged) == [
+        "Skipping structured parameter list",
+        "Skipping structured parameter posinfo",
+    ]
+
+
+async def test_param_store_keeps_value_missing_from_lmsg(api):
+    item = {"lmsg": {"t": 300, "p": {"a": 2}}, "prms": {"b": {"v": 7, "ct": 1, "at": 2}}}
+    store = api.parse_param_store(item)
+    assert store["b"].value == 7
+
+
+async def test_param_store_lmsg_only_in_lmsg(api):
+    item = {"lmsg": {"t": 300, "p": {"a": 2, "c": 3}}, "prms": {"a": {"v": 1, "ct": 1, "at": 2}}}
+    store = api.parse_param_store(item)
+    assert store["a"].value == 1  # prms wins
+    assert store["c"] == api.ParamValue(3, _dt(300), _dt(300))
+
+
+async def test_param_store_fallback_without_prms(api):
+    item = {"lmsg": {"t": 300, "p": {"a": 2}}}
+    assert api.parse_param_store(item) == {"a": api.ParamValue(2, _dt(300), _dt(300))}
+
+
+async def test_param_store_empty(api):
+    assert api.parse_param_store(None) == {}
+    assert api.parse_param_store({}) == {}
+    assert api.parse_param_store({"lmsg": None, "prms": None}) == {}
+    assert api.parse_param_store({"prms": []}) == {}
+
+
+async def test_param_store_timestamps(api):
+    item = {"prms": {"a": {"v": 1, "ct": True, "at": "x"}, "b": {"v": 1, "ct": 1e30}, "c": {"v": 1}}}
+    store = api.parse_param_store(item)
+    for key in "abc":
+        assert store[key].changed is None
+        assert store[key].reported is None
+    # lmsg without a usable time still yields values
+    store = api.parse_param_store({"lmsg": {"t": True, "p": {"a": 1}}})
+    assert store["a"] == api.ParamValue(1, None, None)
+
+
+async def test_param_attributes(api):
+    assert api.param_attributes(None) == {"last_changed": None}
+    attrs = api.param_attributes(api.ParamValue(1, _dt(100), _dt(300)))
+    assert attrs == {"last_changed": _dt(100).isoformat()}
+
+
 # --- resolve / probe ------------------------------------------------------
 
 
@@ -341,7 +422,8 @@ async def test_get_units_with_removed_unit(api, client, fake):
     assert len(batch) == 1
     inner = batch[0][1]["params"]
     assert [c["svc"] for c in inner] == ["core/search_item"] * 3
-    assert inner[0]["params"] == {"id": 1, "flags": 1281}
+    assert inner[0]["params"] == {"id": 1, "flags": 1281 | 0x00100000}
+    assert api.POLL_FLAGS == 1281 | 0x00100000
 
 
 async def test_get_units_empty(api, client, fake):
