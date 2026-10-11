@@ -1,8 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.2.1
 
 - Parameter sensors and binary sensors read Wialon's accumulated parameter store, so a value no longer drops to unknown when the latest message omits it. A new `last_changed` attribute tells when the tracker last changed the value.
+- Parameters that were reported before but are missing from the latest message now get their entities too; most are created disabled.
+- The store's `posinfo` (the last position) does not become a sensor and is redacted in diagnostics. Structured values like it are skipped, with a debug log line once per key.
+- Tags with a suffix (such as `v0.2.2b0`) are published as pre-releases, which HACS offers only with "Show beta versions".
 
 ## 0.2.0
 

@@ -21,6 +21,17 @@ jobs:
             echo "Tag ${GITHUB_REF_NAME} does not match manifest version v${version}" >&2
             exit 1
           fi
+      - name: Mark pre-releases
+        id: kind
+        # v1.2.3 is a release; anything with a suffix (v1.2.3b0, v1.2.3rc1)
+        # is a pre-release, which HACS offers only with "Show beta versions".
+        run: |
+          if [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
+          prerelease: ${{ steps.kind.outputs.prerelease }}
