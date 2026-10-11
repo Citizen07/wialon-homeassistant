@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 import logging
@@ -16,6 +17,9 @@ _LOGGER = logging.getLogger(__name__)
 
 TIMEOUT = aiohttp.ClientTimeout(total=15)
 UNIT_FLAGS = 1281  # 0x1 base + 0x100 advanced + 0x400 last message & position
+# Polling adds 0x00100000 message parameters: the accumulated per-parameter
+# store, which keeps values that the latest message omits.
+POLL_FLAGS = UNIT_FLAGS | 0x00100000
 AUTH_ERROR_CODES = (4, 7, 8)
 ERROR_INVALID_SESSION = 1
 
@@ -269,7 +273,7 @@ class WialonClient:
                 "params": [
                     {
                         "svc": "core/search_item",
-                        "params": {"id": int(i), "flags": UNIT_FLAGS},
+                        "params": {"id": int(i), "flags": POLL_FLAGS},
                     }
                     for i in ids
                 ],
@@ -312,14 +316,63 @@ def parse_params(lmsg: dict | None) -> dict:
     return dict(params) if isinstance(params, dict) else {}
 
 
-def message_time(lmsg: dict | None) -> datetime | None:
-    """Return the message time as an aware UTC datetime."""
-    if not isinstance(lmsg, dict):
-        return None
-    t = lmsg.get("t")
+def _to_datetime(t: Any) -> datetime | None:
+    """Convert Wialon UTC seconds to an aware datetime, None when unusable."""
     if isinstance(t, bool) or not isinstance(t, (int, float)):
         return None
     try:
         return datetime.fromtimestamp(t, UTC)
     except (OverflowError, OSError, ValueError):
         return None
+
+
+def message_time(lmsg: dict | None) -> datetime | None:
+    """Return the message time as an aware UTC datetime."""
+    if not isinstance(lmsg, dict):
+        return None
+    return _to_datetime(lmsg.get("t"))
+
+
+@dataclass(frozen=True)
+class ParamValue:
+    """One device parameter with the times Wialon last saw it."""
+
+    value: Any
+    changed: datetime | None
+    reported: datetime | None
+
+
+def parse_param_store(item: dict | None) -> dict[str, ParamValue]:
+    """Return the accumulated parameters of a unit item.
+
+    Source is `prms` (flag 0x00100000), which keeps a parameter after a message
+    omits it. Parameters of the last message that the store lacks are added;
+    without `prms` the last message alone is used, stamped with its time.
+    """
+    if not isinstance(item, dict):
+        return {}
+    lmsg = item.get("lmsg")
+    msg_time = message_time(lmsg)
+    out: dict[str, ParamValue] = {}
+    prms = item.get("prms")
+    if isinstance(prms, dict):
+        for key, entry in prms.items():
+            if isinstance(entry, dict) and "v" in entry:
+                out[key] = ParamValue(
+                    entry["v"],
+                    _to_datetime(entry.get("ct")),
+                    _to_datetime(entry.get("at")),
+                )
+    for key, value in parse_params(lmsg).items():
+        out.setdefault(key, ParamValue(value, msg_time, msg_time))
+    return out
+
+
+def param_attributes(param: ParamValue | None) -> dict[str, str | None]:
+    """State attributes of a parameter.
+
+    Only the change time: the report time moves with every message, so as an
+    attribute it would write a state row per poll even when nothing changed.
+    """
+    changed = param.changed if param else None
+    return {"last_changed": changed.isoformat() if changed else None}

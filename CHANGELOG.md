@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Parameter sensors and binary sensors read Wialon's accumulated parameter store, so a value no longer drops to unknown when the latest message omits it. A new `last_changed` attribute tells when the tracker last changed the value.
+
 ## 0.2.0
 
 First public release.

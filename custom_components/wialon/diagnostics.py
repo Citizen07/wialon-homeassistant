@@ -12,8 +12,9 @@ from .const import CONF_TOKEN, CONF_USER_NAME
 
 TO_REDACT = {CONF_TOKEN, CONF_USER_NAME}
 # Unit fields that identify the vehicle, its tracker or its location. Redaction
-# is recursive, so "pos" also covers lmsg.pos. Params in lmsg.p stay: they are
-# what diagnostics are for.
+# is recursive, so "pos" also covers lmsg.pos. Params in lmsg.p and prms stay:
+# they are what diagnostics are for (a param named like a field above is
+# redacted too, which errs on the safe side).
 UNIT_REDACT = {"nm", "uid", "uid2", "ph", "ph2", "psw", "pos"}
 
 

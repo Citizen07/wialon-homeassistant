@@ -81,7 +81,10 @@ Per unit:
   `sensor<ID>`, and some named keys such as J1939 and J1979, are converted with
   the Xirgo sensor table. Parameters with an ID below 8192 become binary
   sensors (doors, ignition and so on). A raw value of 0 on a sensor that has an
-  offset means "no reading", and the entity is unknown.
+  offset means "no reading", and the entity is unknown. A value persists
+  across messages that omit the parameter, and stays until Wialon's stored
+  value changes. The `last_changed` attribute tells when the tracker last
+  changed it; the `Last message` sensor tells how fresh the unit's data is.
 - Unmapped, duplicate and user-defined parameters are created disabled. Enable
   them in the entity settings if you need them.
 
