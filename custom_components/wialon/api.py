@@ -333,6 +333,11 @@ def message_time(lmsg: dict | None) -> datetime | None:
     return _to_datetime(lmsg.get("t"))
 
 
+# Structured store keys already logged, so the store can be parsed on every
+# state read without repeating the message.
+_skipped_structured: set[str] = set()
+
+
 @dataclass(frozen=True)
 class ParamValue:
     """One device parameter with the times Wialon last saw it."""
@@ -357,18 +362,20 @@ def parse_param_store(item: dict | None) -> dict[str, ParamValue]:
     prms = item.get("prms")
     if isinstance(prms, dict):
         for key, entry in prms.items():
-            # Structured values are not device parameters: `posinfo` holds the
+            if not isinstance(entry, dict) or "v" not in entry:
+                continue
+            # Structured values cannot be a sensor state: `posinfo` holds the
             # last position, which the device tracker already covers.
-            if (
-                isinstance(entry, dict)
-                and "v" in entry
-                and not isinstance(entry["v"], (dict, list))
-            ):
-                out[key] = ParamValue(
-                    entry["v"],
-                    _to_datetime(entry.get("ct")),
-                    _to_datetime(entry.get("at")),
-                )
+            if isinstance(entry["v"], (dict, list)):
+                if key not in _skipped_structured:
+                    _skipped_structured.add(key)
+                    _LOGGER.debug("Skipping structured parameter %s", key)
+                continue
+            out[key] = ParamValue(
+                entry["v"],
+                _to_datetime(entry.get("ct")),
+                _to_datetime(entry.get("at")),
+            )
     for key, value in parse_params(lmsg).items():
         out.setdefault(key, ParamValue(value, msg_time, msg_time))
     return out

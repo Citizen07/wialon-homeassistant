@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 import json
+import logging
 from urllib.parse import parse_qs, urlsplit
 
 import aiohttp
@@ -243,7 +244,9 @@ async def test_param_store_skips_malformed(api):
     assert list(api.parse_param_store(item)) == ["d"]
 
 
-async def test_param_store_skips_structured_values(api):
+async def test_param_store_skips_structured_values(api, caplog):
+    caplog.set_level(logging.DEBUG, logger=api.__name__)
+    api._skipped_structured.clear()
     item = {
         "prms": {
             "posinfo": {"v": {"x": 1.0, "y": 2.0}, "ct": 1, "at": 2},
@@ -252,6 +255,12 @@ async def test_param_store_skips_structured_values(api):
         }
     }
     assert list(api.parse_param_store(item)) == ["a"]
+    api.parse_param_store(item)
+    logged = [r.getMessage() for r in caplog.records if "structured" in r.getMessage()]
+    assert sorted(logged) == [
+        "Skipping structured parameter list",
+        "Skipping structured parameter posinfo",
+    ]
 
 
 async def test_param_store_keeps_value_missing_from_lmsg(api):
