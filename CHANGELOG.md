@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `wialon.import_history` run before Home Assistant had compiled any statistics for a counter (distance, fuel used) left a step down the size of the whole import where its rows met the recorder's own: the recorder starts its sum at 0 because an import writes no short-term statistics. Imported sums now end at 0 in that case, so the two join. Installs already affected can fix the step with Developer Tools → Statistics → adjust sum at the first hour Home Assistant recorded itself.
+
 ## 0.2.1
 
 - Parameter sensors and binary sensors read Wialon's accumulated parameter store, so a value no longer drops to unknown when the latest message omits it. A new `last_changed` attribute tells when the tracker last changed the value.

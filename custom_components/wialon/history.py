@@ -193,12 +193,16 @@ def chain_sums(rows: list[Row], anchor: tuple[float, float] | None) -> list[Row]
     """Add `sum` to total rows.
 
     anchor is (sum, state) of the earliest existing statistic row:
-    sum_h = S0 + (state_h - V0). Without one, sums start at 0 for the first row.
+    sum_h = S0 + (state_h - V0). Without one, the sums END at 0 on the last
+    row. The recorder starts its own sum at 0 on its first compile, because
+    it continues from the last short-term statistic and an import writes
+    none; ending at 0 makes the import join that start instead of leaving a
+    step down the size of the whole import.
     """
     if not rows:
         return []
     if anchor is None:
-        s0, v0 = 0.0, rows[0]["state"]
+        s0, v0 = 0.0, rows[-1]["state"]
     else:
         s0, v0 = anchor
     return [{**r, "sum": s0 + (r["state"] - v0)} for r in rows]
