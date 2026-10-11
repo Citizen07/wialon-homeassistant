@@ -4,6 +4,7 @@
 
 - Each poll also reads the messages received since the previous poll (one extra `messages/load_interval` call per unit, only when it has new messages; skipped on the first poll and after gaps over 6 hours). Numeric parameter sensors expose the extremes of that window as the `window_min`, `window_max` and `window_to` attributes, so short events between polls are no longer lost.
 - Wialon's eco-driving parameters `wln_accel_max`, `wln_brk_max` and `wln_crn_max` become sensors (in g).
+- `wialon.import_history` run before Home Assistant had compiled any statistics for a counter (distance, fuel used) left a step down the size of the whole import where its rows met the recorder's own: the recorder starts its sum at 0 because an import writes no short-term statistics. Imported sums now end at 0 in that case, so the two join. Installs already affected can fix the step with Developer Tools → Statistics → adjust sum at the first hour Home Assistant recorded itself.
 
 ## 0.2.1
 
