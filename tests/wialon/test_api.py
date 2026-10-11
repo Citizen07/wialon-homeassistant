@@ -243,6 +243,17 @@ async def test_param_store_skips_malformed(api):
     assert list(api.parse_param_store(item)) == ["d"]
 
 
+async def test_param_store_skips_structured_values(api):
+    item = {
+        "prms": {
+            "posinfo": {"v": {"x": 1.0, "y": 2.0}, "ct": 1, "at": 2},
+            "list": {"v": [1, 2], "ct": 1, "at": 2},
+            "a": {"v": 3, "ct": 1, "at": 2},
+        }
+    }
+    assert list(api.parse_param_store(item)) == ["a"]
+
+
 async def test_param_store_keeps_value_missing_from_lmsg(api):
     item = {"lmsg": {"t": 300, "p": {"a": 2}}, "prms": {"b": {"v": 7, "ct": 1, "at": 2}}}
     store = api.parse_param_store(item)

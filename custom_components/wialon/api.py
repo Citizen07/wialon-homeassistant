@@ -357,7 +357,13 @@ def parse_param_store(item: dict | None) -> dict[str, ParamValue]:
     prms = item.get("prms")
     if isinstance(prms, dict):
         for key, entry in prms.items():
-            if isinstance(entry, dict) and "v" in entry:
+            # Structured values are not device parameters: `posinfo` holds the
+            # last position, which the device tracker already covers.
+            if (
+                isinstance(entry, dict)
+                and "v" in entry
+                and not isinstance(entry["v"], (dict, list))
+            ):
                 out[key] = ParamValue(
                     entry["v"],
                     _to_datetime(entry.get("ct")),
