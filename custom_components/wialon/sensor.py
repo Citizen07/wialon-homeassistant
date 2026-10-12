@@ -203,7 +203,9 @@ class WialonParamSensor(WialonEntity, SensorEntity):
         extremes = window_extremes(
             self._resolved,
             window.params.get(self._key, []),
-            self._attr_suggested_display_precision,
+            # The public property: the _attr_ field is unset for raw keys,
+            # and HA's cached-property metaclass raises instead of defaulting.
+            self.suggested_display_precision,
         )
         if extremes is not None:
             attrs["window_min"], attrs["window_max"] = extremes
