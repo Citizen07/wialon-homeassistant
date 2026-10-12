@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2
 
 - Each poll also reads the messages received since the previous poll (one extra `messages/load_interval` call per unit, only when it has new messages; skipped on the first poll and after gaps over 6 hours). Numeric parameter sensors expose the extremes of that window as the `window_min`, `window_max` and `window_to` attributes, so short events between polls are no longer lost.
 - Wialon's eco-driving parameters `wln_accel_max`, `wln_brk_max` and `wln_crn_max` become sensors (in g).
