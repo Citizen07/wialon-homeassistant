@@ -47,6 +47,15 @@ class WialonTracker(WialonEntity, TrackerEntity):
         super().__init__(coordinator, unit_id, item)
         self._attr_unique_id = f"{unit_id}_tracker"
 
+    @property
+    def force_update(self) -> bool:
+        """Write only changes, unlike push trackers where every report counts.
+
+        An unchanged position leaves last_changed alone and adds no recorder
+        row; a moving unit changes its coordinates, which writes anyway.
+        """
+        return False
+
     def _position(self) -> dict | None:
         return self.coordinator.last_position.get(self.unit_id)
 

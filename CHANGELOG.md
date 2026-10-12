@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3
+
+- The GPS tracker no longer writes a state, a recorder row and a `state_changed` event on every poll while the unit stands still. Home Assistant forces those writes for push-style trackers such as phone apps; a Wialon unit that moves changes its coordinates, which still writes. `last_changed` now tells when the tracker actually changed.
+
 ## 0.2.2
 
 - Each poll also reads the messages received since the previous poll (one extra `messages/load_interval` call per unit, only when it has new messages; skipped on the first poll and after gaps over 6 hours). Numeric parameter sensors expose the extremes of that window as the `window_min`, `window_max` and `window_to` attributes, so short events between polls are no longer lost.
