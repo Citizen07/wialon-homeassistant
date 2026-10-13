@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- New `Track` sensor per unit: the distance driven today in km, with the day's GPS track as a GeoJSON line in the `geo_location` attribute for ha-map-card (see the README's Map section). The track is built from every position Wialon stored, split at silences over 10 minutes, simplified to 5 m (more for very long days, to stay under 64 KB), and leaves out positions without a GPS fix and parked jitter. The attribute is not recorded.
+- New `Track date` entity per unit to show the track of a past day. Selecting today follows the live track again; a past day stays frozen. After a restart the sensor shows today.
+- Each poll appends the new positions to today's track, and reloads the whole day after a gap, a failed window or local midnight.
+
 ## 0.2.3
 
 - The GPS tracker no longer writes a state, a recorder row and a `state_changed` event on every poll while the unit stands still. Home Assistant forces those writes for push-style trackers such as phone apps; a Wialon unit that moves changes its coordinates, which still writes. `last_changed` now tells when the tracker actually changed.

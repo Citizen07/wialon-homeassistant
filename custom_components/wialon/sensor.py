@@ -112,6 +112,7 @@ async def async_setup_entry(
                 new.extend(
                     WialonSensor(coordinator, unit_id, item, desc) for desc in SENSORS
                 )
+                new.append(WialonTrackSensor(coordinator, unit_id, item))
             keys = param_keys.setdefault(unit_id, set())
             for key, param in parse_param_store(item).items():
                 if key not in keys:
@@ -150,6 +151,40 @@ class WialonSensor(WialonEntity, SensorEntity):
     def native_value(self) -> Any:
         """Value from the latest message."""
         return self.entity_description.value_fn(self.lmsg)
+
+
+class WialonTrackSensor(WialonEntity, SensorEntity):
+    """Distance of the shown day's track, with the GeoJSON line as attribute."""
+
+    _attr_translation_key = "track"
+    _attr_device_class = SensorDeviceClass.DISTANCE
+    _attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
+    _attr_suggested_display_precision = 1
+    # The line is up to 64 KB and Wialon already holds the history.
+    _unrecorded_attributes = frozenset({"geo_location"})
+
+    def __init__(
+        self, coordinator: WialonCoordinator, unit_id: int, item: dict
+    ) -> None:
+        """Initialize."""
+        super().__init__(coordinator, unit_id, item)
+        self._attr_unique_id = f"{unit_id}_track"
+
+    @property
+    def native_value(self) -> float | None:
+        """Driven distance of the shown day."""
+        track = self.coordinator.tracks.get(self.unit_id)
+        return track.distance_km if track else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """The day and the track as GeoJSON (ha-map-card's default attribute)."""
+        track = self.coordinator.tracks.get(self.unit_id)
+        day = self.coordinator.track_date(self.unit_id)
+        return {
+            "date": day.isoformat() if day else None,
+            "geo_location": track.geojson if track else None,
+        }
 
 
 class WialonParamSensor(WialonEntity, SensorEntity):
