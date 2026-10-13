@@ -63,6 +63,13 @@ def history():
 
 
 @pytest.fixture(scope="session")
+def track():
+    """The track module (pure GPS track building)."""
+    _stub_package()
+    return importlib.import_module(f"{STUB_PACKAGE}.track")
+
+
+@pytest.fixture(scope="session")
 def xirgo():
     """The generated xirgo_sensors module."""
     _stub_package()

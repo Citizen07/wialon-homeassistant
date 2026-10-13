@@ -24,7 +24,12 @@ from .services import async_register_services
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.DEVICE_TRACKER, Platform.SENSOR]
+PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.DATE,
+    Platform.DEVICE_TRACKER,
+    Platform.SENSOR,
+]
 
 
 @dataclass

@@ -77,6 +77,11 @@ Per unit:
 
 - **Device tracker** with the GPS position.
 - **Sensors:** speed, course, altitude, satellites and last message.
+- **Track sensor** with the distance driven on the shown day (km). Its
+  `geo_location` attribute holds the day's GPS track as a GeoJSON
+  `MultiLineString`, and `date` tells which day it covers. See [Map](#map).
+- **Track date** entity: pick a day to show its track; pick today to follow
+  the live track again.
 - **Parameter sensors and binary sensors.** Xirgo XG parameters reported as
   `sensor<ID>`, and some named keys such as J1939 and J1979, are converted with
   the Xirgo sensor table. Parameters with an ID below 8192 become binary
@@ -99,6 +104,32 @@ Per unit:
   in g) and appear as regular sensors when the unit reports them.
 - Unmapped, duplicate and user-defined parameters are created disabled. Enable
   them in the entity settings if you need them.
+
+## Map
+
+Home Assistant's built-in map card cannot draw a line from an attribute. Use
+[ha-map-card](https://github.com/nathan-gs/ha-map-card) (a HACS frontend
+card), which builds its GeoJSON layer from the live attribute on every state
+update:
+
+```yaml
+type: custom:map-card
+entities:
+  - entity: device_tracker.<unit>
+  - entity: sensor.<unit>_track
+    geojson:
+      attribute: geo_location
+      weight: 4
+      hide_marker: true
+```
+
+- `hide_marker: true` means the track sensor needs no position of its own.
+- The `geo_location` attribute is not recorded: Wialon already holds the
+  history. After a restart, today's track is reloaded from Wialon.
+- Choosing a past day with the **Track date** entity freezes the track on that
+  day. It stays there until you select today again.
+- Positions without a GPS fix (satellites 0) and short parked GPS jitter are
+  left out. The line is thinned to stay under 64 KB.
 
 ## Action: `wialon.import_history`
 

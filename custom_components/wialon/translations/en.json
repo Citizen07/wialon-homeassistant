@@ -91,7 +91,11 @@
       "course": { "name": "Course" },
       "altitude": { "name": "Altitude" },
       "satellites": { "name": "Satellites" },
-      "last_message": { "name": "Last message" }
+      "last_message": { "name": "Last message" },
+      "track": { "name": "Track" }
+    },
+    "date": {
+      "track_date": { "name": "Track date" }
     }
   },
   "services": {

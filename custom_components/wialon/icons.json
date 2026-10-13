@@ -1,4 +1,16 @@
 {
+  "entity": {
+    "sensor": {
+      "track": {
+        "default": "mdi:map-marker-path"
+      }
+    },
+    "date": {
+      "track_date": {
+        "default": "mdi:calendar-search"
+      }
+    }
+  },
   "services": {
     "import_history": {
       "service": "mdi:history"
