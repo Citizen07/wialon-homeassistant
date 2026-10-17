@@ -71,3 +71,19 @@ def test_unmapped_text_param_has_no_window_attributes() -> None:
 
     assert "window_min" not in attrs
     assert "window_to" not in attrs
+
+
+def test_counter_zero_holds_last_reading() -> None:
+    """A 0 odometer keeps the last real value, so statistics see no reset."""
+    key = "can_mileage"  # 0.005 km per bit, total_increasing
+    coordinator = _coordinator({})
+    sensor = WialonParamSensor(coordinator, UNIT_ID, {"nm": "Unit"}, key, 1)
+
+    def report(raw: int) -> object:
+        coordinator.data[UNIT_ID]["prms"] = {key: {"v": raw, "ct": 1, "at": 1}}
+        return sensor.native_value
+
+    assert report(0) is None
+    assert report(2469000) == pytest.approx(12345.0)
+    assert report(0) == pytest.approx(12345.0)
+    assert report(2469200) == pytest.approx(12346.0)

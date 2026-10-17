@@ -81,6 +81,12 @@ def test_air_temp_value(params):
     assert params.convert(params.resolve("j1939_air_temp"), 60653) == 1622.40625
 
 
+@pytest.mark.parametrize("key", ["can_mileage", "total_fuel", "can_engine_hrs"])
+def test_convert_counter_zero_is_no_reading(params, key):
+    """A counter's raw 0 is a CAN wake-up glitch, not a meter reset."""
+    assert params.convert(params.resolve(key), 0) is None
+
+
 @pytest.mark.parametrize("raw", ["12", None, True, False, [1], {"a": 1}])
 def test_convert_non_numeric(params, raw):
     assert params.convert(params.resolve("can_taho"), raw) is None
@@ -299,8 +305,14 @@ def test_raw_zero_on_offset_sensor_is_no_reading(params, key):
 
 
 def test_raw_zero_without_offset_is_a_value(params):
-    assert params.convert(params.resolve("sensor16387"), 0) == 0
     assert params.convert(params.resolve("can_taho"), 0) == 0
+
+
+def test_raw_zero_on_generic_counter_is_no_reading(params):
+    """Xirgo rows named TOTAL resolve as counters, so their 0 is dropped too."""
+    res = params.resolve("sensor16387")
+    assert res.state_class == "total_increasing"
+    assert params.convert(res, 0) is None
 
 
 @pytest.mark.parametrize(

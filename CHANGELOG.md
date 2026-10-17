@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- A counter (total distance, total fuel used, engine hours) that a tracker reports as 0 now keeps its last real reading. Trackers send 0 for a message or two while the CAN bus wakes, and Home Assistant counted each one as a meter reset, adding the whole odometer to that hour in statistics graphs. `wialon.import_history` skips those zeros too. Spikes already recorded stay; remove each with Developer Tools → Statistics → adjust sum at its hour.
+
 ## 0.3.0
 
 - New `Track` sensor per unit: the distance driven today in km, with the day's GPS track as a GeoJSON line in the `geo_location` attribute for ha-map-card (see the README's Map section). The track is built from every position Wialon stored, split at silences over 10 minutes, simplified to 5 m (more for very long days, to stay under 64 KB), and leaves out positions without a GPS fix and parked jitter. The attribute is not recorded.
