@@ -203,6 +203,7 @@ class WialonParamSensor(WialonEntity, SensorEntity):
         self._key = key
         self._numeric = _is_number(sample)
         self._attr_unique_id = f"{unit_id}_param_{key}"
+        self._last_total: float | None = None
         self._resolved = resolve(key)
         if self._resolved is not None:
             res = self._resolved
@@ -256,7 +257,18 @@ class WialonParamSensor(WialonEntity, SensorEntity):
             return None
         if self._resolved is not None:
             if _is_number(value):
-                return convert(self._resolved, value) if self._numeric else None
+                if not self._numeric:
+                    return None
+                converted = convert(self._resolved, value)
+                if self._resolved.state_class != SensorStateClass.TOTAL_INCREASING:
+                    return converted
+                # A counter's 0 is no reading (see convert). Home Assistant
+                # reads any drop as a meter reset and adds the whole counter
+                # to that hour's sum, and unknown flickers into templates, so
+                # the last real reading stands in (None before the first).
+                if converted is not None:
+                    self._last_total = converted
+                return self._last_total
             if isinstance(value, str) and not self._numeric:
                 return value[:MAX_STATE_LENGTH]
             return None

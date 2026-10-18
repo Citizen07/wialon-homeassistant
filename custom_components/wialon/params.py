@@ -342,11 +342,13 @@ def convert(resolved: ResolvedParam, raw: Any) -> float | None:
     """Apply multiplier and offset to a raw value; None when not numeric.
 
     A raw 0 on an offset sensor is "no reading", not a value: coolant reads
-    raw 0 while the CAN bus sleeps, which would otherwise be -40 °C.
+    raw 0 while the CAN bus sleeps, which would otherwise be -40 °C. So is a
+    raw 0 on a counter: trackers send the odometer or fuel used as 0 for a
+    message or two while the CAN bus wakes.
     """
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return None
-    if raw == 0 and resolved.offset != 0:
+    if raw == 0 and (resolved.offset != 0 or resolved.state_class == _TOTAL):
         return None
     return raw * resolved.multiplier + resolved.offset
 
