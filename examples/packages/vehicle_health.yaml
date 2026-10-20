@@ -1,0 +1,263 @@
+# =============================================================================
+# Vehicle tracker health (Wialon)
+#
+# Is the tracker reporting, is the link to Wialon up, is the GNSS fix usable,
+# is the tracker powered. Also defines binary_sensor.my_car_in_use, which
+# every other vehicle package builds on, so install this one first.
+#
+# Needs from the Wialon integration (unit prefix `my_unit`):
+#   sensor.my_unit_last_message   fixed sensor, every unit
+#   sensor.my_unit_satellites     fixed sensor, every unit
+#   sensor.my_unit_speed          fixed sensor (GNSS speed), every unit
+#   sensor.my_unit_hdop           Wialon's raw `hdop` parameter; created
+#                                 disabled, enable it in the entity settings
+#   sensor.my_unit_vcc            SENSOR_VCC, the car's 12 V feed (mV)
+#   sensor.my_unit_vbat           SENSOR_VBAT, the tracker's backup cell (mV)
+#   binary_sensor.my_unit_ignition       SENSOR_IGNITION (if `ignition`)
+#   binary_sensor.my_unit_ready_to_drive SENSOR_READY_TO_DRIVE (if `hybrid`)
+#   sensor.my_unit_engine_speed   SENSOR_ENGINE_SPEED (CAN)
+#   sensor.my_unit_wheel_speed    SENSOR_WHEEL_SPEED (CAN), optional
+#
+# The integration holds parameter values from Wialon's parameter store, so a
+# sensor keeps its value through messages that omit it. Two consequences
+# shape everything below:
+# - `sensor.*_last_message` (the time of the unit's newest message) is the
+#   only freshness signal. A parameter's `last_changed` attribute is when the
+#   tracker last CHANGED that value, not when it last sent it.
+# - A value the tracker forgets to clear stays "on" indefinitely. See
+#   my_car_ready below.
+#
+# Car-specific settings (hybrid, ignition, silence thresholds) live in
+# vehicle_cfg in custom_templates/wialon_vehicles.jinja.
+# =============================================================================
+
+template:
+  - binary_sensor:
+      # READY, unless it is stale. Hybrids only; on other cars it stays off.
+      #
+      # A tracker sometimes sends no READY-off at trip end. The held "on"
+      # then kept the car "in use" for good, and every parked alert went
+      # silent. With the ignition off and its last change (the tracker's own
+      # time) newer than READY's, READY is left over from the previous trip
+      # and is ignored.
+      - name: My car ready
+        unique_id: my_car_ready
+        icon: mdi:car-electric
+        state: >
+          {% set rdy = 'binary_sensor.my_unit_ready_to_drive' %}
+          {% set ign = 'binary_sensor.my_unit_ignition' %}
+          {% set r = state_attr(rdy, 'last_changed') | as_datetime(none) %}
+          {% set i = state_attr(ign, 'last_changed') | as_datetime(none) %}
+          {{ is_state(rdy, 'on')
+             and (is_state(ign, 'on') or r is none or i is none or r >= i) }}
+
+      # In use: decides which silence threshold applies, and is the trip
+      # boundary for vehicle_engine.yaml. It reads held values, so a tracker
+      # that dies mid-drive stays "in use" and is caught by the short
+      # in-use silence rule. A hybrid in READY with the engine off is in use.
+      # Without an ignition input, engine speed or movement stands in.
+      - name: My car in use
+        unique_id: my_car_in_use
+        icon: mdi:car-key
+        state: >
+          {% from 'wialon_vehicles.jinja' import vehicle_cfg %}
+          {% set c = vehicle_cfg('my_car') | from_json %}
+          {% if c.ignition %}
+            {{ is_state('binary_sensor.my_unit_ignition', 'on')
+               or is_state('binary_sensor.my_car_ready', 'on') }}
+          {% else %}
+            {{ states('sensor.my_unit_engine_speed') | float(0) > 0
+               or states('sensor.my_unit_speed') | float(0) > 5 }}
+          {% endif %}
+
+      # No message for silent_in_use_min while in use, or silent_parked_h at
+      # all. Unavailable while the integration is down, so a Wialon outage is
+      # not reported as a silent tracker. now() re-renders this every minute;
+      # the state only changes at the threshold, so it adds no recorder rows.
+      #
+      # delay_on: one poll writes the Wialon entities one at a time and this
+      # re-renders between them. At trip start the ignition lands before
+      # last_message, so for an instant the car is in use with a message
+      # hours old. Without the delay that pulse pushes a false alert.
+      - name: My car tracker silent
+        unique_id: my_car_tracker_silent
+        device_class: problem
+        delay_on: "00:02:00"
+        availability: "{{ has_value('sensor.my_unit_last_message') }}"
+        state: >
+          {% from 'wialon_vehicles.jinja' import vehicle_cfg %}
+          {% set c = vehicle_cfg('my_car') | from_json %}
+          {% set t = states('sensor.my_unit_last_message') | as_datetime
+                 if has_value('sensor.my_unit_last_message') else none %}
+          {% set age = (now() - t).total_seconds() if t else 0 %}
+          {{ age > c.silent_parked_h * 3600
+             or (is_state('binary_sensor.my_car_in_use', 'on')
+                 and age > c.silent_in_use_min * 60) }}
+
+      # The integration failing to poll: every entity goes unavailable at
+      # once. A restart or entry reload does the same for under a minute.
+      # With several cars, require all of their last_message sensors.
+      - name: Wialon unreachable
+        unique_id: wialon_unreachable
+        device_class: problem
+        delay_on: "00:10:00"
+        state: >
+          {{ is_state('sensor.my_unit_last_message', 'unavailable') }}
+
+      # Weak fix while in use: under 5 satellites or HDOP over 2 for 2 min.
+      # Antenna placement matters: of two units, one saw 4–12 satellites, the
+      # other 13–22. Display and counting only; no alert.
+      - name: My car GNSS weak
+        unique_id: my_car_gnss_weak
+        device_class: problem
+        delay_on: "00:02:00"
+        state: >
+          {{ is_state('binary_sensor.my_car_in_use', 'on')
+             and (states('sensor.my_unit_satellites') | int(99) < 5
+                  or states('sensor.my_unit_hdop') | float(0) > 2) }}
+
+      # Tracker power. Vcc is the car's 12 V feed and Vbat the tracker's own
+      # backup cell, both in mV. A tracker without a backup cell cannot report
+      # losing Vcc, so "external power lost" needs one. A unit without a cell
+      # reads Vbat 0, which is what "missing" shows.
+      - name: My car backup battery missing
+        unique_id: my_car_backup_battery_missing
+        device_class: problem
+        availability: "{{ has_value('sensor.my_unit_vbat') }}"
+        state: "{{ states('sensor.my_unit_vbat') | float(0) < 1000 }}"
+
+      - name: My car backup battery low
+        unique_id: my_car_backup_battery_low
+        device_class: battery
+        delay_on: "00:10:00"
+        availability: "{{ has_value('sensor.my_unit_vbat') }}"
+        state: >
+          {% set v = states('sensor.my_unit_vbat') | float(0) %}
+          {{ 1000 <= v < 3600 }}
+
+      - name: My car external power lost
+        unique_id: my_car_external_power_lost
+        device_class: problem
+        availability: "{{ has_value('sensor.my_unit_vcc') }}"
+        state: "{{ states('sensor.my_unit_vcc') | float(99999) < 6000 }}"
+
+  # Wheel speed (CAN) over GNSS speed, per message above 50 km/h, where the
+  # integer GNSS speed is within 2 %. Its 7-day mean below is the
+  # speedometer and odometer error; a slow drift points at tyre wear or a
+  # different tyre size. Needs SENSOR_WHEEL_SPEED; delete this block and the
+  # 7d statistics sensor if your unit has none. Holds its value outside the
+  # window, so it only changes while driving fast enough.
+  - triggers:
+      - trigger: state
+        entity_id: sensor.my_unit_wheel_speed
+        not_to: ["unavailable", "unknown"]
+    sensor:
+      - name: My car wheel to GNSS speed ratio
+        unique_id: my_car_wheel_gnss_speed_ratio
+        state_class: measurement
+        icon: mdi:speedometer
+        state: >
+          {% set w = trigger.to_state.state | float(0) %}
+          {% set g = states('sensor.my_unit_speed') | float(0) %}
+          {% if w >= 50 and g >= 50 %}{{ (w / g) | round(3) }}
+          {% elif this.state | is_number %}{{ this.state }}
+          {% else %}{{ none }}{% endif %}
+
+sensor:
+  - platform: statistics
+    name: My car wheel to GNSS speed ratio 7d
+    unique_id: my_car_wheel_gnss_speed_ratio_7d
+    entity_id: sensor.my_car_wheel_to_gnss_speed_ratio
+    state_characteristic: mean
+    max_age:
+      days: 7
+    keep_last_sample: true
+    sampling_size: 20000
+    precision: 3
+
+  # Episodes in the last 7 days. history_stats reads the recorder, so keep
+  # recorder purge_keep_days at 7 or more (the default is 10).
+  - platform: history_stats
+    name: My car tracker silences 7d
+    unique_id: my_car_tracker_silences_7d
+    entity_id: binary_sensor.my_car_tracker_silent
+    state: "on"
+    type: count
+    start: "{{ now() - timedelta(days=7) }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: Wialon outages 7d
+    unique_id: wialon_outages_7d
+    entity_id: binary_sensor.wialon_unreachable
+    state: "on"
+    type: count
+    start: "{{ now() - timedelta(days=7) }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: My car GNSS weak 7d
+    unique_id: my_car_gnss_weak_7d
+    entity_id: binary_sensor.my_car_gnss_weak
+    state: "on"
+    type: count
+    start: "{{ now() - timedelta(days=7) }}"
+    end: "{{ now() }}"
+
+automation:
+  # Raise on off → on and clear on on → off. Transitions from unavailable or
+  # unknown are skipped, so a restart neither repeats a standing alert nor
+  # clears one. "Backup battery missing" is display only: on a unit without
+  # a cell it is a permanent state, not news.
+  - id: vehicle_tracker_health_alert
+    alias: "Vehicles — tracker health alert"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: &health_alerts
+          - binary_sensor.my_car_tracker_silent
+          - binary_sensor.wialon_unreachable
+          - binary_sensor.my_car_external_power_lost
+          - binary_sensor.my_car_backup_battery_low
+        from: "off"
+        to: "on"
+        id: raised
+      - trigger: state
+        entity_id: *health_alerts
+        from: "on"
+        to: "off"
+        id: cleared
+    actions:
+      - variables:
+          object: "{{ trigger.entity_id.split('.')[1] }}"
+          # '' for wialon_unreachable, which is about the link, not a car.
+          car: >
+            {% from 'wialon_vehicles.jinja' import vehicle_of %}{{ vehicle_of(object) }}
+          prefix: >
+            {% from 'wialon_vehicles.jinja' import vehicle_cfg %}
+            {{ 'sensor.' ~ (vehicle_cfg(car) | from_json).unit if car else '' }}
+          nid: "vehicle_{{ object }}"
+      - if:
+          - condition: trigger
+            id: cleared
+        then:
+          - action: persistent_notification.dismiss
+            data:
+              notification_id: "{{ nid }}"
+        else:
+          - action: script.vehicle_notify
+            data:
+              title: "{{ trigger.to_state.name }}"
+              message: >
+                {% if not prefix %}
+                The Wialon entities have been unavailable for 10 minutes.
+                Check the integration and the Home Assistant log.
+                {% else %}
+                {% set t = states(prefix ~ '_last_message') | as_datetime
+                           if has_value(prefix ~ '_last_message') else none %}
+                Last message {{ as_local(t).strftime('%d %b %H:%M') if t else 'unknown' }},
+                {{ 'in use' if is_state('binary_sensor.' ~ car ~ '_in_use', 'on') else 'parked' }}.
+                Vcc {{ states(prefix ~ '_vcc') }} mV, backup cell
+                {{ states(prefix ~ '_vbat') }} mV.
+                {% endif %}
+              notification_id: "{{ nid }}"

@@ -1,0 +1,299 @@
+# =============================================================================
+# Vehicle usage and maintenance (Wialon)
+#
+# Service, inspection and insurance reminders, a winter-tyre reminder, and
+# the odometer checked against GNSS distance.
+#
+# Needs from the Wialon integration (unit prefix `my_unit`):
+#   sensor.my_unit_total_distance   SENSOR_TOTAL_DISTANCE (odometer, km)
+#   sensor.my_unit_distance         SENSOR_DISTANCE (GNSS metre counter)
+# and an outdoor temperature sensor (sensor.outdoor_temperature here) for
+# the early winter-tyre reminder.
+#
+# Km per day, week and month need no entities: the odometer is
+# total_increasing, so it has long-term statistics with sums (back as far as
+# a wialon.import_history backfill reaches), and a statistics-graph card
+# with stat_types: change shows them. See the dashboard example.
+#
+# "Not set" is 0 for the numbers (a new input_number starts at its minimum)
+# and any date before 2000 for the dates. A NEW DATE INPUT STARTS AT TODAY,
+# which reads as "due today": right after the first load, set each date to
+# its real value or to 1970-01-01 (Settings → Entities, or the
+# input_datetime.set_datetime action). HA restores the value across
+# restarts. The sensors stay unavailable until their inputs are filled in.
+# =============================================================================
+
+input_number:
+  my_car_service_odo:
+    name: My car last service odometer
+    min: 0
+    max: 999999
+    step: 1
+    mode: box
+    unit_of_measurement: km
+    icon: mdi:wrench-clock
+  my_car_service_interval_km:
+    name: My car service interval
+    min: 0
+    max: 50000
+    step: 500
+    mode: box
+    unit_of_measurement: km
+    icon: mdi:wrench-clock
+  my_car_service_interval_months:
+    name: My car service interval months
+    min: 0
+    max: 36
+    step: 1
+    mode: box
+    unit_of_measurement: months
+    icon: mdi:wrench-clock
+
+input_datetime:
+  my_car_service_date:
+    name: My car last service date
+    has_date: true
+    has_time: false
+  my_car_inspection_due:
+    name: My car technical inspection due
+    has_date: true
+    has_time: false
+  my_car_insurance_due:
+    name: My car insurance expires
+    has_date: true
+    has_time: false
+
+input_boolean:
+  # Set when the winter tyres go on, clear when they come off.
+  my_car_winter_tyres:
+    name: My car winter tyres on
+    icon: mdi:snowflake
+
+template:
+  - sensor:
+      # Service by distance: km left until last service + interval.
+      - name: My car service km left
+        unique_id: my_car_service_km_left
+        unit_of_measurement: km
+        icon: mdi:wrench-clock
+        availability: >
+          {{ states('input_number.my_car_service_odo') | float(0) > 0
+             and states('input_number.my_car_service_interval_km') | float(0) > 0
+             and has_value('sensor.my_unit_total_distance') }}
+        state: >
+          {{ (states('input_number.my_car_service_odo') | float
+              + states('input_number.my_car_service_interval_km') | float
+              - states('sensor.my_unit_total_distance') | float) | round(0) }}
+
+      # Service by time: days left until last service date + interval months
+      # (the day is capped at 28 so every month has it).
+      - name: My car service days left
+        unique_id: my_car_service_days_left
+        unit_of_measurement: d
+        icon: mdi:calendar-clock
+        availability: >
+          {{ states('input_datetime.my_car_service_date') > '2000'
+             and states('input_number.my_car_service_interval_months') | int(0) > 0 }}
+        state: >
+          {% set d = states('input_datetime.my_car_service_date') | as_datetime %}
+          {% set n = states('input_number.my_car_service_interval_months') | int %}
+          {% set k = d.month - 1 + n %}
+          {% set due = d.replace(year=d.year + k // 12, month=k % 12 + 1, day=[d.day, 28] | min) %}
+          {{ (due.date() - now().date()).days }}
+
+      - name: My car inspection days left
+        unique_id: my_car_inspection_days_left
+        unit_of_measurement: d
+        icon: mdi:clipboard-check
+        availability: "{{ states('input_datetime.my_car_inspection_due') > '2000' }}"
+        state: >
+          {{ ((states('input_datetime.my_car_inspection_due') | as_datetime).date()
+              - now().date()).days }}
+
+      - name: My car insurance days left
+        unique_id: my_car_insurance_days_left
+        unit_of_measurement: d
+        icon: mdi:shield-car
+        availability: "{{ states('input_datetime.my_car_insurance_due') > '2000' }}"
+        state: >
+          {{ ((states('input_datetime.my_car_insurance_due') | as_datetime).date()
+              - now().date()).days }}
+
+  - binary_sensor:
+      # Due soon: within 1000 km or 30 days, whichever comes first. The
+      # `overdue` attribute says when it has passed.
+      - name: My car service due
+        unique_id: my_car_service_due
+        device_class: problem
+        availability: >
+          {{ has_value('sensor.my_car_service_km_left') or has_value('sensor.my_car_service_days_left') }}
+        state: >
+          {{ states('sensor.my_car_service_km_left') | float(99999) <= 1000
+             or states('sensor.my_car_service_days_left') | float(99999) <= 30 }}
+        attributes:
+          overdue: >
+            {{ states('sensor.my_car_service_km_left') | float(99999) <= 0
+               or states('sensor.my_car_service_days_left') | float(99999) <= 0 }}
+
+      # Inspection and insurance: within 30 days.
+      - name: My car inspection due
+        unique_id: my_car_inspection_due
+        device_class: problem
+        availability: "{{ has_value('sensor.my_car_inspection_days_left') }}"
+        state: "{{ states('sensor.my_car_inspection_days_left') | int(999) <= 30 }}"
+
+      - name: My car insurance due
+        unique_id: my_car_insurance_due
+        device_class: problem
+        availability: "{{ has_value('sensor.my_car_insurance_days_left') }}"
+        state: "{{ states('sensor.my_car_insurance_days_left') | int(999) <= 30 }}"
+
+      # Winter tyres. The dates are an EXAMPLE of a common rule (winter tyres
+      # required from 10 November to 1 April, studs allowed only then); set
+      # them to your country's rule. The reminder starts two weeks before the
+      # legal date, and earlier still from October when the outdoor 24-hour
+      # mean drops under 5 °C: summer compound hardens and loses grip below
+      # about 7 °C. Off-season it is due from season_end until the winter
+      # tyres come off. Dates are 'MM-DD' strings, so they compare as text.
+      - name: My car tyre change due
+        unique_id: my_car_tyre_change_due
+        device_class: problem
+        icon: mdi:car-tire-alert
+        state: >
+          {% set reminder_from = '10-27' %}
+          {% set season_end = '04-01' %}
+          {% set cold_from = '10-01' %}
+          {% set md = now().strftime('%m-%d') %}
+          {% set winter = is_state('input_boolean.my_car_winter_tyres', 'on') %}
+          {% set season = md >= reminder_from or md < season_end %}
+          {% set cold = md >= cold_from
+                        and states('sensor.outdoor_temperature_24h_mean') | float(99) < 5 %}
+          {{ (not winter and (season or cold))
+             or (winter and season_end <= md < cold_from) }}
+
+  # Odometer over GNSS distance since a baseline taken on the first reading,
+  # shown once 300 km have passed (1 km odometer steps are then under 0.4 %).
+  # Re-baselines every 5000 km and keeps the previous figure in `previous`.
+  # Odometers commonly read 1–2 % high (1.011 and 1.019 on two cars); a
+  # change in it means tyres of a different size or a CAN odometer fault.
+  #
+  # A baseline is only taken while the GNSS distance has a value. One taken
+  # at 0 (the distance sensor still unknown right after a reload) divides by
+  # the tracker's whole lifetime GNSS distance and reads ~0.001, so a zero or
+  # missing base_m counts as no baseline, which clears the state and
+  # baselines afresh.
+  - triggers:
+      - trigger: state
+        entity_id: sensor.my_unit_total_distance
+        not_to: ["unavailable", "unknown"]
+    variables:
+      odo: "{{ trigger.to_state.state | float(0) }}"
+      m: "{{ states('sensor.my_unit_distance') | float(0) }}"
+    sensor:
+      - name: My car odometer to GNSS ratio
+        unique_id: my_car_odometer_gnss_ratio
+        state_class: measurement
+        icon: mdi:counter
+        state: >
+          {% set bo = this.attributes.get('base_odo') %}
+          {% set bm = this.attributes.get('base_m') %}
+          {% set unset = bo is none or bm is none or bm | float(0) <= 0 %}
+          {% set gps = (m - bm) / 1000 if not unset else 0 %}
+          {% if unset %}{{ none }}
+          {% elif gps >= 300 %}{{ ((odo - bo) / gps) | round(4) }}
+          {% elif this.state | is_number %}{{ this.state }}
+          {% else %}{{ none }}{% endif %}
+        attributes:
+          base_odo: >
+            {% set bo = this.attributes.get('base_odo') %}
+            {% set bm = this.attributes.get('base_m') %}
+            {% set unset = bo is none or bm is none or bm | float(0) <= 0 %}
+            {% set rebase = not unset and odo - bo >= 5000 %}
+            {% set take = (unset or rebase) and m > 0 %}
+            {{ odo if take else (none if unset else bo) }}
+          base_m: >
+            {% set bo = this.attributes.get('base_odo') %}
+            {% set bm = this.attributes.get('base_m') %}
+            {% set unset = bo is none or bm is none or bm | float(0) <= 0 %}
+            {% set rebase = not unset and odo - bo >= 5000 %}
+            {% set take = (unset or rebase) and m > 0 %}
+            {{ m if take else (none if unset else bm) }}
+          previous: >
+            {% set bo = this.attributes.get('base_odo') %}
+            {% set bm = this.attributes.get('base_m') %}
+            {% set unset = bo is none or bm is none or bm | float(0) <= 0 %}
+            {% set rebase = not unset and odo - bo >= 5000 %}
+            {{ this.state if rebase and this.state | is_number
+               else this.attributes.get('previous') }}
+
+sensor:
+  # Outdoor 24-hour mean for the tyre reminder. Replace the source with your
+  # own outdoor temperature sensor, or delete this and point the tyre
+  # template at a mean you already have.
+  - platform: statistics
+    name: Outdoor temperature 24h mean
+    unique_id: outdoor_temperature_24h_mean
+    entity_id: sensor.outdoor_temperature
+    state_characteristic: mean
+    max_age:
+      hours: 24
+    keep_last_sample: true
+    sampling_size: 2000
+    precision: 1
+
+automation:
+  # Raise when an item becomes due, clear when it is dealt with (inputs
+  # updated, tyres changed). The persistent notification stays up meanwhile.
+  - id: vehicle_maintenance_reminder
+    alias: "Vehicles — maintenance reminder"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: &maintenance_alerts
+          - binary_sensor.my_car_service_due
+          - binary_sensor.my_car_inspection_due
+          - binary_sensor.my_car_insurance_due
+          - binary_sensor.my_car_tyre_change_due
+        from: "off"
+        to: "on"
+        id: raised
+      - trigger: state
+        entity_id: *maintenance_alerts
+        from: "on"
+        to: "off"
+        id: cleared
+    actions:
+      - variables:
+          object: "{{ trigger.entity_id.split('.')[1] }}"
+          car: >
+            {% from 'wialon_vehicles.jinja' import vehicle_of %}{{ vehicle_of(object) }}
+          item: "{{ object[car | length + 1:] | replace('_due', '') }}"
+          nid: "vehicle_{{ object }}"
+      - if:
+          - condition: trigger
+            id: cleared
+        then:
+          - action: persistent_notification.dismiss
+            data:
+              notification_id: "{{ nid }}"
+        else:
+          - action: script.vehicle_notify
+            data:
+              title: "{{ trigger.to_state.name }}"
+              message: >
+                {% if item == 'service' %}
+                {{ states('sensor.' ~ car ~ '_service_km_left') }} km or
+                {{ states('sensor.' ~ car ~ '_service_days_left') }} days left.
+                After the service, update the last service odometer and date.
+                {% elif item == 'tyre_change' %}
+                {% if is_state('input_boolean.' ~ car ~ '_winter_tyres', 'on') %}
+                The winter-tyre season is over.
+                {% else %}
+                The winter-tyre season is close
+                (outdoor 24 h mean {{ states('sensor.outdoor_temperature_24h_mean') }} °C).
+                {% endif %}
+                Switch "winter tyres on" when they are changed.
+                {% else %}
+                {{ states('sensor.' ~ car ~ '_' ~ item ~ '_days_left') }} days left.
+                {% endif %}
+              notification_id: "{{ nid }}"
