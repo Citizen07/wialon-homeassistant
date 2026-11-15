@@ -131,6 +131,13 @@ entities:
 - Positions without a GPS fix (satellites 0) and short parked GPS jitter are
   left out. The line is thinned to stay under 64 KB.
 
+## Example setup
+
+[docs/examples.md](docs/examples.md) walks through a complete car setup
+built on these entities, in [`examples/`](examples): packages for tracker
+health, the 12 V battery, trips and engine, fuel and refuels, security and
+maintenance, with alerts and a dashboard view including the track map.
+
 ## Action: `wialon.import_history`
 
 Backfills hourly long-term statistics from the messages Wialon has stored, for

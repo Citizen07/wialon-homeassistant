@@ -1,0 +1,223 @@
+# =============================================================================
+# Vehicle 12 V battery (Wialon)
+#
+# Resting voltage as a charge proxy, drain while parked, charging voltage,
+# and how much charging the car gets. Builds on vehicle_health.yaml
+# (binary_sensor.my_car_in_use, binary_sensor.my_car_ready).
+#
+# Needs from the Wialon integration (unit prefix `my_unit`):
+#   sensor.my_unit_vcc                   SENSOR_VCC (mV)
+#   sensor.my_unit_engine_speed          SENSOR_ENGINE_SPEED
+#   binary_sensor.my_unit_ignition       SENSOR_IGNITION (if `ignition`)
+#   binary_sensor.my_unit_ready_to_drive SENSOR_READY_TO_DRIVE (if `hybrid`)
+#
+# Every sample is timed by the integration's `last_changed` attribute, which
+# is the tracker's own time for the reading. HA's state timestamps move on
+# restarts and reloads and are not used.
+#
+# What reaches HA while parked depends on the tracker's configuration.
+# Seen on two units: one wakes every 8 h for ~5 min and reports Vcc each
+# minute, so three bursts of resting readings a day, with ~±50 mV noise from
+# burst to burst; the other's 8 h heartbeat carries no parameters at all, so
+# its parked readings arrive only with events (doors, lock) and are sparse.
+#
+# Resting voltage to charge, roughly, for a lead-acid battery at 20 °C:
+# 12.65 V full, 12.45 V 75 %, 12.24 V 50 %, 12.06 V 25 %, 11.9 V flat. Cold
+# lowers it. The alert threshold is 12.2 V on the 24-hour mean, so one noisy
+# wake cannot trip it. A car used only for short trips can sit below half
+# charge for weeks, falling ~0.03 V a day between drives: that pattern is
+# what this package is for.
+# =============================================================================
+
+template:
+  - binary_sensor:
+      # Charging: a hybrid's 12 V battery is charged by its DC-DC converter
+      # only in READY; a conventional car's by the alternator with the engine
+      # running.
+      - name: My car charging
+        unique_id: my_car_charging
+        icon: mdi:battery-charging
+        state: >
+          {% from 'wialon_vehicles.jinja' import vehicle_cfg %}
+          {% if (vehicle_cfg('my_car') | from_json).hybrid %}
+            {{ is_state('binary_sensor.my_car_ready', 'on') }}
+          {% else %}
+            {{ states('sensor.my_unit_engine_speed') | float(0) > 500 }}
+          {% endif %}
+
+      # Under 12.2 V on the 24-hour mean of resting readings: below about half
+      # charge. Cold-start trouble and sulphation both start around here.
+      - name: My car battery low
+        unique_id: my_car_battery_low
+        device_class: battery
+        availability: "{{ has_value('sensor.my_car_battery_resting_voltage_24h') }}"
+        state: "{{ states('sensor.my_car_battery_resting_voltage_24h') | float(99) < 12.2 }}"
+
+      # Charging voltage outside 13.3–15.0 V for 5 minutes while charging:
+      # under means the DC-DC or alternator is not keeping up or has failed;
+      # over means overcharging.
+      - name: My car charging voltage fault
+        unique_id: my_car_charging_voltage_fault
+        device_class: problem
+        delay_on: "00:05:00"
+        state: >
+          {% set v = states('sensor.my_unit_vcc') | float(0) / 1000 %}
+          {{ is_state('binary_sensor.my_car_charging', 'on') and not 13.3 <= v <= 15.0 }}
+
+  # Per Vcc reading. A reading counts as resting when the car is not in use
+  # and it was taken at least 2 h after use ended, by the tracker's clocks on
+  # both sides. Use ends at the later of the ignition and READY (hybrids)
+  # going off; without an ignition input, at the engine speed last changing
+  # (to 0). Outside that the sensors keep their last value.
+  #
+  # Drain is per parked spell: the fall from the spell's first resting reading
+  # to the latest one, as mV a day, once the two are 24 h apart (with ±50 mV
+  # noise per reading, shorter spans mean little). It resets when the car is
+  # used. A battery recovering from a drive still settles for a day or so,
+  # which reads as drain early in a spell. The tracker's own draw is part of
+  # what this measures.
+  - triggers:
+      - trigger: state
+        entity_id: sensor.my_unit_vcc
+        not_to: ["unavailable", "unknown"]
+    variables:
+      mv: "{{ trigger.to_state.state | float(0) }}"
+      at: "{{ trigger.to_state.attributes.get('last_changed') }}"
+      used_until: >
+        {% from 'wialon_vehicles.jinja' import vehicle_cfg %}
+        {% set c = vehicle_cfg('my_car') | from_json %}
+        {% set ids = (['binary_sensor.my_unit_ignition'] if c.ignition
+                      else ['sensor.my_unit_engine_speed'])
+                     + (['binary_sensor.my_unit_ready_to_drive'] if c.hybrid else []) %}
+        {% set e = ids | map('state_attr', 'last_changed') | reject('none')
+                   | map('as_datetime') | reject('none') | list %}
+        {{ (e | max).isoformat() if e else '' }}
+      resting: >
+        {% set t = at | as_datetime if at else none %}
+        {% set u = used_until | as_datetime if used_until else none %}
+        {{ mv > 0 and t is not none and u is not none
+           and is_state('binary_sensor.my_car_in_use', 'off')
+           and (t - u).total_seconds() >= 7200 }}
+    sensor:
+      - name: My car battery resting voltage
+        unique_id: my_car_battery_resting_voltage
+        unit_of_measurement: V
+        device_class: voltage
+        state_class: measurement
+        state: >
+          {% if resting %}{{ (mv / 1000) | round(2) }}
+          {% elif this.state | is_number %}{{ this.state }}
+          {% else %}{{ none }}{% endif %}
+        attributes:
+          measured_at: "{{ at if resting else this.attributes.get('measured_at') }}"
+          parked_since: "{{ used_until if resting else this.attributes.get('parked_since') }}"
+
+      - name: My car battery drain
+        unique_id: my_car_battery_drain
+        unit_of_measurement: mV/d
+        state_class: measurement
+        icon: mdi:battery-arrow-down
+        state: >
+          {% set fa = this.attributes.get('first_at') %}
+          {% set first_at = fa | as_datetime if fa else none %}
+          {% if resting and this.attributes.get('spell') == used_until and first_at %}
+            {% set h = ((at | as_datetime) - first_at).total_seconds() / 3600 %}
+            {% if h >= 24 %}{{ ((this.attributes.first_mv - mv) / h * 24) | round(0) }}
+            {% elif this.state | is_number %}{{ this.state }}
+            {% else %}{{ none }}{% endif %}
+          {% elif resting %}{{ none }}
+          {% elif this.state | is_number %}{{ this.state }}
+          {% else %}{{ none }}{% endif %}
+        attributes:
+          spell: "{{ used_until if resting else this.attributes.get('spell') }}"
+          first_mv: >
+            {{ mv if resting and this.attributes.get('spell') != used_until
+               else this.attributes.get('first_mv') }}
+          first_at: >
+            {{ at if resting and this.attributes.get('spell') != used_until
+               else this.attributes.get('first_at') }}
+
+      # Charging voltage: Vcc while charging, from a minute after charging
+      # started, so the switch-on transient is left out. Holds between drives.
+      - name: My car battery charging voltage
+        unique_id: my_car_battery_charging_voltage
+        unit_of_measurement: V
+        device_class: voltage
+        state_class: measurement
+        state: >
+          {% set c = states.binary_sensor.my_car_charging %}
+          {% if c is not none and c.state == 'on'
+                and (now() - c.last_changed).total_seconds() >= 60 %}
+            {{ (mv / 1000) | round(2) }}
+          {% elif this.state | is_number %}{{ this.state }}
+          {% else %}{{ none }}{% endif %}
+
+sensor:
+  # Mean of the resting readings over a day. Sample-based, which suits a
+  # source that only changes when a reading arrives. keep_last_sample holds
+  # the last reading through a day with none (a car parked without events).
+  - platform: statistics
+    name: My car battery resting voltage 24h
+    unique_id: my_car_battery_resting_voltage_24h
+    entity_id: sensor.my_car_battery_resting_voltage
+    state_characteristic: mean
+    max_age:
+      hours: 24
+    keep_last_sample: true
+    sampling_size: 500
+    precision: 2
+
+  # Charging time per week. A car that charges for minutes a week cannot
+  # hold its battery up against the tracker's and the car's standby draw.
+  - platform: history_stats
+    name: My car charging hours 7d
+    unique_id: my_car_charging_hours_7d
+    entity_id: binary_sensor.my_car_charging
+    state: "on"
+    type: time
+    start: "{{ now() - timedelta(days=7) }}"
+    end: "{{ now() }}"
+
+automation:
+  # Same raise/clear pattern as the tracker health alert.
+  - id: vehicle_battery_alert
+    alias: "Vehicles — 12 V battery alert"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: &battery_alerts
+          - binary_sensor.my_car_battery_low
+          - binary_sensor.my_car_charging_voltage_fault
+        from: "off"
+        to: "on"
+        id: raised
+      - trigger: state
+        entity_id: *battery_alerts
+        from: "on"
+        to: "off"
+        id: cleared
+    actions:
+      - variables:
+          object: "{{ trigger.entity_id.split('.')[1] }}"
+          car: >
+            {% from 'wialon_vehicles.jinja' import vehicle_of %}{{ vehicle_of(object) }}
+          nid: "vehicle_{{ object }}"
+      - if:
+          - condition: trigger
+            id: cleared
+        then:
+          - action: persistent_notification.dismiss
+            data:
+              notification_id: "{{ nid }}"
+        else:
+          - action: script.vehicle_notify
+            data:
+              title: "{{ trigger.to_state.name }}"
+              message: >
+                Resting {{ states('sensor.' ~ car ~ '_battery_resting_voltage_24h') }} V
+                (24 h mean), drain {{ states('sensor.' ~ car ~ '_battery_drain') }} mV/day,
+                last charging voltage
+                {{ states('sensor.' ~ car ~ '_battery_charging_voltage') }} V,
+                charged {{ states('sensor.' ~ car ~ '_charging_hours_7d') | float(0) | round(1) }} h
+                in the last 7 days.
+              notification_id: "{{ nid }}"

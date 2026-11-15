@@ -1,0 +1,246 @@
+# A "Car" dashboard view for the example vehicle packages.
+#
+# Paste it into a dashboard's raw configuration editor (⋮ → Edit dashboard →
+# ⋮ → Raw configuration editor) as one more item under `views:`, or, for a
+# YAML-mode dashboard, add it to that file's `views:`.
+#
+# Replace `my_unit` (the Wialon unit's entity prefix) and `my_car` (the
+# packages' car name) as in the packages. The map needs ha-map-card from
+# HACS (custom:map-card); the rest uses built-in cards only.
+
+title: Car
+path: car
+icon: mdi:car
+type: sections
+max_columns: 2
+sections:
+  - type: grid
+    column_span: 2
+    cards:
+      - type: heading
+        heading: Track
+        heading_style: title
+      # The day's GPS track from the integration's Track sensor: every
+      # position Wialon stored, not one per poll. ha-map-card draws it from
+      # the track sensor's geo_location attribute; the built-in map card
+      # cannot draw a line from an attribute. The Day tile picks the day;
+      # today follows the live track.
+      #
+      # The card fits its markers, never the line. With several cars parked
+      # side by side it would zoom to street level, so focus_entity + zoom
+      # centre on one car at city zoom instead.
+      #
+      # The tracker also draws its last 24 h from the recorder: one point per
+      # poll, drawn faint under the day track. It spans midnight, which the
+      # day track does not.
+      - type: custom:map-card
+        focus_entity: device_tracker.my_unit
+        zoom: 12
+        grid_options: {columns: full, rows: 8}
+        entities:
+          - entity: device_tracker.my_unit
+            history_start: 24 hours ago
+            history_line_color: 'rgba(229,57,53,0.45)'
+            history_show_dots: false
+          - entity: sensor.my_unit_track
+            geojson:
+              attribute: geo_location
+              color: '#e53935'
+              weight: 4
+              hide_marker: true
+      - type: tile
+        entity: sensor.my_unit_track
+        name: Today
+        color: red
+        grid_options: {columns: 6}
+      - type: tile
+        entity: date.my_unit_track_date
+        name: Day
+        color: red
+        grid_options: {columns: 6}
+
+  # vehicle_health.yaml
+  - type: grid
+    cards:
+      - type: entities
+        title: Tracker
+        state_color: true
+        entities:
+          - entity: sensor.my_unit_last_message
+            name: Last message
+            format: relative
+          - entity: binary_sensor.my_car_in_use
+            name: In use
+          - entity: binary_sensor.my_car_tracker_silent
+            name: Tracker silent
+          - entity: binary_sensor.my_car_external_power_lost
+            name: External power lost
+          - entity: binary_sensor.my_car_backup_battery_missing
+            name: Backup cell missing
+          - entity: binary_sensor.my_car_backup_battery_low
+            name: Backup cell low
+          - entity: sensor.my_unit_vcc
+            name: Car battery
+          - entity: sensor.my_unit_vbat
+            name: Backup cell
+          - type: divider
+          - entity: sensor.my_unit_satellites
+            name: Satellites
+          - entity: sensor.my_unit_hdop
+            name: HDOP
+          - entity: binary_sensor.my_car_gnss_weak
+            name: GNSS weak
+          - entity: sensor.my_car_wheel_to_gnss_speed_ratio_7d
+            name: Wheel / GNSS speed, 7 d
+          - entity: sensor.my_car_tracker_silences_7d
+            name: Silences, 7 d
+          - entity: sensor.my_car_gnss_weak_7d
+            name: Weak GNSS episodes, 7 d
+          - entity: sensor.wialon_outages_7d
+            name: Wialon outages, 7 d
+
+  # vehicle_battery.yaml and vehicle_security.yaml
+  - type: grid
+    cards:
+      - type: entities
+        title: 12 V battery
+        state_color: true
+        entities:
+          - entity: sensor.my_car_battery_resting_voltage_24h
+            name: Resting, 24 h mean
+          - entity: sensor.my_car_battery_resting_voltage
+            name: Last resting reading
+          - entity: sensor.my_car_battery_drain
+            name: Drain while parked
+          - entity: sensor.my_car_battery_charging_voltage
+            name: Charging voltage
+          - entity: sensor.my_car_charging_hours_7d
+            name: Charging, 7 d
+          - entity: binary_sensor.my_car_battery_low
+            name: Battery low
+          - entity: binary_sensor.my_car_charging_voltage_fault
+            name: Charging voltage fault
+      - type: entities
+        title: Security
+        state_color: true
+        entities:
+          - entity: binary_sensor.my_car_left_open
+            name: Left open
+          - entity: binary_sensor.my_car_left_unlocked
+            name: Left unlocked
+          - entity: binary_sensor.my_car_lights_left_on
+            name: Lights left on
+          - entity: binary_sensor.my_car_moved_while_parked
+            name: Moved while parked
+          - entity: binary_sensor.my_car_door_opened_while_armed
+            name: Door opened while armed
+          - entity: sensor.my_car_parked_position
+            name: Parked
+            format: relative
+
+  # vehicle_fuel.yaml and vehicle_engine.yaml
+  - type: grid
+    cards:
+      - type: entities
+        title: Fuel
+        state_color: true
+        entities:
+          - entity: sensor.my_car_fuel
+            name: In tank
+          - entity: sensor.my_car_range
+            name: Range
+          - entity: sensor.my_car_fuel_consumption
+            name: Consumption, last 10 trips
+          - entity: sensor.my_car_fuel_consumption_full_to_full
+            name: Consumption, full to full
+          - entity: sensor.my_car_last_refuel
+            name: Last fill
+            format: relative
+          - entity: input_number.my_car_refuel_litres
+            name: Pump litres
+      - type: entities
+        title: Trips and engine
+        state_color: true
+        entities:
+          - entity: sensor.my_car_trip
+            name: Current or last trip
+          - entity: sensor.my_car_last_trip
+            name: Last logged trip
+          # Hybrids:
+          - entity: sensor.my_car_ev_share_recent_trips
+            name: EV share, last 10 trips
+          # With coolant temperature:
+          - entity: sensor.my_car_cold_trip_share
+            name: Cold trips, last 10
+          - entity: binary_sensor.my_car_thermostat_suspect
+            name: Thermostat suspect
+      # The trip log as a table. Markdown cards fail silently on a template
+      # error (the card keeps its last good render), so test edits in
+      # Developer Tools → Template first.
+      - type: markdown
+        title: Recent trips
+        content: |
+          {% set trips = state_attr('sensor.my_car_last_trip', 'trips') or [] -%}
+          {% if trips -%}
+          | Ended | min | km | L | idle min |
+          |:--|--:|--:|--:|--:|
+          {% for t in trips[:10] -%}
+          | {{ as_local(as_datetime(t.ended)).strftime('%d %b %H:%M') if t.ended else '' }} | {{ t.minutes }} | {{ t.km if t.km is not none else '–' }} | {{ t.fuel_l if t.fuel_l is not none else '–' }} | {{ t.idle_ticks if t.idle_ticks is not none else '–' }} |
+          {% endfor -%}
+          {% else -%}
+          No trips logged yet.
+          {% endif %}
+
+  # vehicle_maintenance.yaml; the km graphs need only the odometer sensor.
+  - type: grid
+    cards:
+      - type: statistics-graph
+        title: Km per day
+        chart_type: bar
+        period: day
+        days_to_show: 30
+        stat_types: [change]
+        entities:
+          - entity: sensor.my_unit_total_distance
+            name: Km
+      - type: statistics-graph
+        title: Km per month
+        chart_type: bar
+        period: month
+        days_to_show: 365
+        stat_types: [change]
+        entities:
+          - entity: sensor.my_unit_total_distance
+            name: Km
+      - type: entities
+        title: Maintenance
+        state_color: true
+        entities:
+          - entity: sensor.my_car_service_km_left
+            name: Service in (km)
+          - entity: sensor.my_car_service_days_left
+            name: Service in (days)
+          - entity: sensor.my_car_inspection_days_left
+            name: Inspection in (days)
+          - entity: sensor.my_car_insurance_days_left
+            name: Insurance in (days)
+          - entity: input_boolean.my_car_winter_tyres
+            name: Winter tyres on
+          - entity: binary_sensor.my_car_tyre_change_due
+            name: Tyre change due
+          - entity: sensor.my_car_odometer_to_gnss_ratio
+            name: Odometer / GNSS
+          - type: section
+            label: Settings
+          - entity: input_number.my_car_service_odo
+            name: Last service odometer
+          - entity: input_datetime.my_car_service_date
+            name: Last service date
+          - entity: input_number.my_car_service_interval_km
+            name: Interval (km)
+          - entity: input_number.my_car_service_interval_months
+            name: Interval (months)
+          - entity: input_datetime.my_car_inspection_due
+            name: Inspection due
+          - entity: input_datetime.my_car_insurance_due
+            name: Insurance expires

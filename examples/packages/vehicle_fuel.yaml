@@ -1,0 +1,212 @@
+# =============================================================================
+# Vehicle fuel (Wialon)
+#
+# Litres in the tank, refuels, fuel lost while parked, consumption and range.
+# Builds on vehicle_health.yaml (in use) and vehicle_engine.yaml (the trip
+# log, for consumption).
+#
+# Needs from the Wialon integration (unit prefix `my_unit`):
+#   sensor.my_unit_fuel_level_1     SENSOR_FUEL_LEVEL_1 (% or L, see below)
+#   sensor.my_unit_distance         SENSOR_DISTANCE (metre counter)
+#   sensor.my_unit_total_distance   SENSOR_TOTAL_DISTANCE (odometer, km)
+#   sensor.my_unit_total_fuel_used  SENSOR_TOTAL_FUEL_USED (optional)
+#
+# Fuel gauges differ by car, and the settings in vehicle_cfg
+# (wialon_vehicles.jinja) describe yours:
+# - fuel_level_1 is % on some cars and litres on others. The entity's unit
+#   says "%/L" either way; compare it with the dashboard gauge.
+# - Many gauges read 0 for a moment at trip start (a glitch, ignored).
+# - Some stay at 100 % for days after a fill (`saturates_at`): litres are
+#   then a lower bound and losses are not judged.
+# - Some slosh while driving (`sloshes`), so only parked readings count.
+# fuel_level_2 on the same trackers can swing 20+ points within minutes;
+# leave it disabled unless yours proves stable.
+#
+# Consumption is per trip (fuel_l in the trip log), summed over the last 10
+# trips that have it. Pump litres entered after a fill give exact
+# full-to-full figures, which also cover a saturated gauge.
+#
+# Logic is in wialon_vehicles.jinja: reload_custom_templates before
+# template.reload.
+# =============================================================================
+
+input_number:
+  # Enter the litres from the pump receipt after a fill. The value is
+  # attached to the latest detected refuel, or recorded as a new one if the
+  # fill was not detected, and the field then clears itself.
+  my_car_refuel_litres:
+    name: My car refuel litres
+    min: 0
+    max: 120
+    step: 0.01
+    mode: box
+    unit_of_measurement: L
+    icon: mdi:gas-station
+
+template:
+  # Litres in the tank from each reading, plus the refuel and loss events the
+  # vehicle_fuel macro derives. Events are dicts stamped with the reading's
+  # tracker time; a new event replaces the attribute, which is what the log
+  # and the alert trigger on. Every template calls the macro itself, because
+  # `this` is only available inside entity templates.
+  - triggers:
+      - trigger: state
+        entity_id: sensor.my_unit_fuel_level_1
+        not_to: ["unavailable", "unknown"]
+    variables:
+      raw: "{{ trigger.to_state.state }}"
+      raw_at: "{{ trigger.to_state.attributes.get('last_changed') }}"
+    sensor:
+      - name: My car fuel
+        unique_id: my_car_fuel
+        unit_of_measurement: L
+        device_class: volume_storage
+        state_class: measurement
+        icon: mdi:gas-station
+        state: >
+          {% from 'wialon_vehicles.jinja' import vehicle_fuel %}
+          {% set f = vehicle_fuel('my_car', this.attributes, raw, raw_at) | from_json %}
+          {% if f.skip %}{{ this.state if this.state | is_number else none }}
+          {% else %}{{ f.litres }}{% endif %}
+        attributes:
+          raw: >
+            {% from 'wialon_vehicles.jinja' import vehicle_fuel %}
+            {{ (vehicle_fuel('my_car', this.attributes, raw, raw_at) | from_json).get('raw') }}
+          saturated: >
+            {% from 'wialon_vehicles.jinja' import vehicle_fuel %}
+            {{ (vehicle_fuel('my_car', this.attributes, raw, raw_at) | from_json).get('saturated', false) }}
+          parked_l: >
+            {% from 'wialon_vehicles.jinja' import vehicle_fuel %}
+            {{ (vehicle_fuel('my_car', this.attributes, raw, raw_at) | from_json).get('parked_l') }}
+          parked_m: >
+            {% from 'wialon_vehicles.jinja' import vehicle_fuel %}
+            {{ (vehicle_fuel('my_car', this.attributes, raw, raw_at) | from_json).get('parked_m') }}
+          parked_sat: >
+            {% from 'wialon_vehicles.jinja' import vehicle_fuel %}
+            {{ (vehicle_fuel('my_car', this.attributes, raw, raw_at) | from_json).get('parked_sat', false) }}
+          min_l: >
+            {% from 'wialon_vehicles.jinja' import vehicle_fuel %}
+            {{ (vehicle_fuel('my_car', this.attributes, raw, raw_at) | from_json).get('min_l') }}
+          refuel: >
+            {% from 'wialon_vehicles.jinja' import vehicle_fuel %}
+            {{ (vehicle_fuel('my_car', this.attributes, raw, raw_at) | from_json).get('refuel') }}
+          loss: >
+            {% from 'wialon_vehicles.jinja' import vehicle_fuel %}
+            {{ (vehicle_fuel('my_car', this.attributes, raw, raw_at) | from_json).get('loss') }}
+
+  # Refuel log, newest first, last 20 (vehicle_refuel_log macro). State: the
+  # time of the latest fill. Pump litres complete it.
+  - triggers:
+      - trigger: state
+        entity_id: sensor.my_car_fuel
+        attribute: refuel
+        id: refuel
+      - trigger: state
+        entity_id: input_number.my_car_refuel_litres
+        id: litres
+    variables:
+      refuel: "{{ trigger.to_state.attributes.get('refuel') if trigger.id == 'refuel' else none }}"
+      litres: "{{ trigger.to_state.state if trigger.id == 'litres' else 0 }}"
+    sensor:
+      - name: My car last refuel
+        unique_id: my_car_last_refuel
+        device_class: timestamp
+        icon: mdi:gas-station
+        state: >
+          {% from 'wialon_vehicles.jinja' import vehicle_refuel_log %}
+          {% set log = vehicle_refuel_log('my_car', this.attributes, trigger.id, refuel, litres) | from_json %}
+          {{ (log[0].at | as_datetime) if log | count else none }}
+        attributes:
+          refuels: >
+            {% from 'wialon_vehicles.jinja' import vehicle_refuel_log %}
+            {{ vehicle_refuel_log('my_car', this.attributes, trigger.id, refuel, litres) | from_json }}
+
+  - sensor:
+      # L/100 km over the last 10 logged trips that have a fuel figure and
+      # cover at least 30 km together.
+      - name: My car fuel consumption
+        unique_id: my_car_fuel_consumption
+        unit_of_measurement: L/100km
+        state_class: measurement
+        icon: mdi:fuel
+        state: >
+          {% set t = (state_attr('sensor.my_car_last_trip', 'trips') or [])
+                     | selectattr('fuel_l', 'number') | selectattr('km', 'number') | list %}
+          {% set t = t[:10] %}
+          {% set km = t | map(attribute='km') | sum %}
+          {{ (100 * (t | map(attribute='fuel_l') | sum) / km) | round(1) if km >= 30 else none }}
+
+      # Latest full-to-full figure from the refuel log.
+      - name: My car fuel consumption full to full
+        unique_id: my_car_fuel_consumption_full_to_full
+        unit_of_measurement: L/100km
+        icon: mdi:gas-station-outline
+        state: >
+          {% set r = (state_attr('sensor.my_car_last_refuel', 'refuels') or [])
+                     | selectattr('l_per_100', 'number') | list %}
+          {{ r[0].l_per_100 if r else none }}
+
+      # Range from the litres in the tank and recent consumption, falling back
+      # to full-to-full. While the gauge is saturated it is a lower bound
+      # (`lower_bound`).
+      - name: My car range
+        unique_id: my_car_range
+        unit_of_measurement: km
+        device_class: distance
+        icon: mdi:map-marker-distance
+        state: >
+          {% set l = states('sensor.my_car_fuel') | float(none) %}
+          {% set c = states('sensor.my_car_fuel_consumption') | float(none)
+                     or states('sensor.my_car_fuel_consumption_full_to_full') | float(none) %}
+          {{ (100 * l / c) | round(0) if l is not none and c else none }}
+        attributes:
+          lower_bound: "{{ state_attr('sensor.my_car_fuel', 'saturated') == true }}"
+
+automation:
+  # Fuel gone while the car stood still: a leak or siphoning.
+  - id: vehicle_fuel_loss_alert
+    alias: "Vehicles — fuel lost while parked"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id:
+          - sensor.my_car_fuel
+        attribute: loss
+    conditions:
+      - condition: template
+        value_template: >
+          {% set l = trigger.to_state.attributes.get('loss') %}
+          {{ l is mapping and l != (trigger.from_state.attributes.get('loss')
+                                    if trigger.from_state else none) }}
+    actions:
+      - variables:
+          l: "{{ trigger.to_state.attributes.loss }}"
+          car: >
+            {% from 'wialon_vehicles.jinja' import vehicle_of %}{{ vehicle_of(trigger.entity_id.split('.')[1]) }}
+      - action: script.vehicle_notify
+        data:
+          title: "{{ state_attr('sensor.' ~ car ~ '_fuel', 'friendly_name') }} dropped while parked"
+          message: >
+            {{ l.before }} L → {{ l.after }} L without the car moving
+            ({{ as_local(l.at | as_datetime).strftime('%d %b %H:%M') if l.at else 'time unknown' }}).
+            A leak or siphoning; check the car.
+          notification_id: "vehicle_{{ car }}_fuel_loss"
+
+  # Clear the pump-litres field once the log has taken the value.
+  - id: vehicle_refuel_litres_reset
+    alias: "Vehicles — clear refuel litres input"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id:
+          - input_number.my_car_refuel_litres
+        for: "00:00:05"
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.to_state.state | float(0) > 0 }}"
+    actions:
+      - action: input_number.set_value
+        target:
+          entity_id: "{{ trigger.entity_id }}"
+        data:
+          value: 0

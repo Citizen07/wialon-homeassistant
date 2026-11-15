@@ -1,0 +1,201 @@
+# =============================================================================
+# Vehicle left open and security (Wialon)
+#
+# Doors left open, the car left unlocked or with its lights on, the car
+# moving while parked, a door opened while armed, and the factory alarm.
+# All alert wherever the car is, not only at home. Builds on
+# vehicle_health.yaml (in use, ready).
+#
+# Needs from the Wialon integration (unit prefix `my_unit`):
+#   device_tracker.my_unit                     position
+#   sensor.my_unit_speed, _satellites, _hdop   fixed sensors; hdop is the raw
+#                                              Wialon key, enable it
+#   binary_sensor.my_unit_doors_f_l ... (the `doors` list in vehicle_cfg)
+#                                              SENSOR_DOORS_*, _TRUNK, _BONNET
+#   binary_sensor.my_unit_locked               SENSOR_LOCKED
+#   binary_sensor.my_unit_armed                SENSOR_ARMED
+#   binary_sensor.my_unit_headlight_indicator  SENSOR_HEADLIGHT_INDICATOR
+#   binary_sensor.my_unit_parking_light_indicator
+#                                              SENSOR_PARKING_LIGHT_INDICATOR
+#   binary_sensor.my_unit_factory_alarm        SENSOR_FACTORY_ALARM
+# The light indicators and the factory alarm are created disabled; enable
+# them in the entity settings. A sensor your car does not have simply never
+# turns on, so the checks built on it stay off.
+#
+# Which signals work depends on the car. Look at each one's history before
+# trusting it: on one car the trunk and bonnet never changed in months
+# (probably not decoded from its CAN), and another reported rear doors it
+# does not have (see `doors` in vehicle_cfg).
+#
+# Parked messages: some trackers report door, lock and light events while
+# parked; others only wake every few hours, so a door left open may only
+# show at the next wake. Check your tracker's configuration.
+# =============================================================================
+
+template:
+  # Where the car was parked: the tracker position when it stopped being in
+  # use. The moved-while-parked check measures from here.
+  - triggers:
+      - trigger: state
+        entity_id: binary_sensor.my_car_in_use
+        to: "off"
+      - trigger: homeassistant
+        event: start
+      - trigger: event
+        event_type: event_template_reloaded
+    sensor:
+      - name: My car parked position
+        unique_id: my_car_parked_position
+        device_class: timestamp
+        icon: mdi:parking
+        state: "{{ now() if is_state('binary_sensor.my_car_in_use', 'off') else this.state }}"
+        attributes:
+          latitude: >
+            {{ state_attr('device_tracker.my_unit', 'latitude')
+               if is_state('binary_sensor.my_car_in_use', 'off') else this.attributes.get('latitude') }}
+          longitude: >
+            {{ state_attr('device_tracker.my_unit', 'longitude')
+               if is_state('binary_sensor.my_car_in_use', 'off') else this.attributes.get('longitude') }}
+
+  - binary_sensor:
+      # Any listed door, trunk or bonnet open for 10 minutes while parked.
+      # Only the openings in vehicle_cfg's `doors` count: a CAN bit for a
+      # door the car does not have can flap while driving and end a trip
+      # "on", which would raise this after every trip.
+      - name: My car left open
+        unique_id: my_car_left_open
+        device_class: opening
+        delay_on: "00:10:00"
+        state: >
+          {% from 'wialon_vehicles.jinja' import vehicle_cfg %}
+          {{ is_state('binary_sensor.my_car_in_use', 'off')
+             and (vehicle_cfg('my_car') | from_json).doors
+                 | map('regex_replace', '^', 'binary_sensor.my_unit_')
+                 | select('is_state', 'on') | list | count > 0 }}
+        attributes:
+          open: >
+            {% from 'wialon_vehicles.jinja' import vehicle_cfg %}
+            {{ (vehicle_cfg('my_car') | from_json).doors
+               | map('regex_replace', '^', 'binary_sensor.my_unit_')
+               | select('is_state', 'on') | map('state_attr', 'friendly_name') | list }}
+
+      # binary_sensor.my_unit_locked has device class `lock`, so despite its
+      # name it is on when UNLOCKED: the integration inverts the tracker's
+      # 1 = locked to HA's convention.
+      - name: My car left unlocked
+        unique_id: my_car_left_unlocked
+        device_class: lock
+        delay_on: "00:15:00"
+        state: >
+          {{ is_state('binary_sensor.my_car_in_use', 'off')
+             and is_state('binary_sensor.my_unit_locked', 'on') }}
+
+      - name: My car lights left on
+        unique_id: my_car_lights_left_on
+        device_class: light
+        delay_on: "00:02:00"
+        state: >
+          {{ is_state('binary_sensor.my_car_in_use', 'off')
+             and (is_state('binary_sensor.my_unit_headlight_indicator', 'on')
+                  or is_state('binary_sensor.my_unit_parking_light_indicator', 'on')) }}
+
+      # Moving with the ignition (or, without an ignition input, the engine)
+      # off: towed, lifted or stolen without the key. GNSS speed over
+      # 10 km/h, or more than 300 m from where it was parked; the distance
+      # only counts with a fix of 5+ satellites and HDOP under 3, so a fix
+      # inside a garage cannot trip it. This uses its own "off" rather than
+      # in_use, because a car without an ignition input counts movement as
+      # use.
+      #
+      # delay_on, here and on the armed-door check: one poll writes the
+      # Wialon entities one at a time and these re-render between them. At
+      # trip end the ignition goes off before the parked position re-latches,
+      # so the new spot is briefly compared with the previous parking spot; a
+      # door and `armed` changing in one message can likewise overlap for an
+      # instant. Without the delay both pulses push false alerts. Values are
+      # held between messages, so a real event outlasts the delay.
+      - name: My car moved while parked
+        unique_id: my_car_moved_while_parked
+        device_class: moving
+        delay_on: "00:02:00"
+        state: >
+          {% from 'wialon_vehicles.jinja' import vehicle_cfg %}
+          {% set c = vehicle_cfg('my_car') | from_json %}
+          {% set off = (is_state('binary_sensor.my_unit_ignition', 'off')
+                        and is_state('binary_sensor.my_car_ready', 'off'))
+                       if c.ignition
+                       else states('sensor.my_unit_engine_speed') | float(0) == 0 %}
+          {% set lat = state_attr('sensor.my_car_parked_position', 'latitude') %}
+          {% set lon = state_attr('sensor.my_car_parked_position', 'longitude') %}
+          {% set good = states('sensor.my_unit_satellites') | int(0) >= 5
+                        and states('sensor.my_unit_hdop') | float(99) < 3 %}
+          {% set km = distance(lat, lon, 'device_tracker.my_unit')
+                      if lat is not none and lon is not none else none %}
+          {{ off and (states('sensor.my_unit_speed') | float(0) > 10
+                      or (good and km is not none and km > 0.3)) }}
+
+      # A door open while the factory system is armed. Unlocking with the
+      # remote disarms before a door can open, so this means entry without
+      # it. The bonnet is left out.
+      - name: My car door opened while armed
+        unique_id: my_car_door_opened_while_armed
+        device_class: safety
+        delay_on: "00:02:00"
+        state: >
+          {% from 'wialon_vehicles.jinja' import vehicle_cfg %}
+          {{ is_state('binary_sensor.my_unit_armed', 'on')
+             and (vehicle_cfg('my_car') | from_json).doors | reject('eq', 'bonnet')
+                 | map('regex_replace', '^', 'binary_sensor.my_unit_')
+                 | select('is_state', 'on') | list | count > 0 }}
+
+automation:
+  - id: vehicle_security_alert
+    alias: "Vehicles — left open and security alert"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: &security_alerts
+          - binary_sensor.my_car_left_open
+          - binary_sensor.my_car_left_unlocked
+          - binary_sensor.my_car_lights_left_on
+          - binary_sensor.my_car_moved_while_parked
+          - binary_sensor.my_car_door_opened_while_armed
+          - binary_sensor.my_unit_factory_alarm
+        from: "off"
+        to: "on"
+        id: raised
+      - trigger: state
+        entity_id: *security_alerts
+        from: "on"
+        to: "off"
+        id: cleared
+    actions:
+      - variables:
+          object: "{{ trigger.entity_id.split('.')[1] }}"
+          car: >
+            {% from 'wialon_vehicles.jinja' import vehicle_of %}{{ vehicle_of(object) }}
+          unit: >
+            {% from 'wialon_vehicles.jinja' import vehicle_cfg %}{{ (vehicle_cfg(car) | from_json).unit }}
+          tracker: "device_tracker.{{ unit }}"
+          nid: "vehicle_{{ object }}"
+      - if:
+          - condition: trigger
+            id: cleared
+        then:
+          - action: persistent_notification.dismiss
+            data:
+              notification_id: "{{ nid }}"
+        else:
+          - action: script.vehicle_notify
+            data:
+              title: "{{ trigger.to_state.name }}"
+              message: >
+                {% set open = trigger.to_state.attributes.get('open') %}
+                {% if open %}Open: {{ open | join(', ') }}. {% endif %}
+                {% if 'moved' in object %}Speed {{ states('sensor.' ~ unit ~ '_speed') }} km/h,
+                {{ (distance(state_attr('sensor.' ~ car ~ '_parked_position', 'latitude'),
+                             state_attr('sensor.' ~ car ~ '_parked_position', 'longitude'),
+                             tracker) or 0) | round(2) }} km from where it was parked.
+                {% endif %}
+                Car is {{ states(tracker) }}.
+              notification_id: "{{ nid }}"

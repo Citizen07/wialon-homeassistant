@@ -1,0 +1,227 @@
+# =============================================================================
+# Vehicle trips, engine and hybrid (Wialon)
+#
+# Per trip: how long, how far, how much fuel, idle minutes, and
+# - hybrid: how much of it ran on the battery (engine stopped in READY);
+# - with coolant temperature: how fast the engine warmed, how hot it got.
+# Then a log of recent trips, figures built on it, and a stuck-open
+# thermostat check.
+#
+# Needs from the Wialon integration (unit prefix `my_unit`):
+#   sensor.my_unit_distance            SENSOR_DISTANCE (metre counter)
+#   sensor.my_unit_speed               fixed GNSS speed sensor
+#   sensor.my_unit_engine_speed        SENSOR_ENGINE_SPEED (CAN)
+#   sensor.my_unit_engine_temperature  SENSOR_ENGINE_TEMPERATURE (if `coolant`)
+#   sensor.my_unit_total_fuel_used     SENSOR_TOTAL_FUEL_USED (if `fuel_counter`)
+#   sensor.my_unit_fuel_level_1        SENSOR_FUEL_LEVEL_1 (trip fuel without
+#                                      a counter)
+# and binary_sensor.my_car_in_use / my_car_ready from vehicle_health.yaml.
+#
+# Check what your car really reports before relying on a figure: a tracker
+# can create an engine temperature or engine load sensor that reads 0 (or
+# nothing) forever because it cannot decode that value from the car's CAN.
+# Set `coolant: false` in vehicle_cfg if so. The history graph of each
+# sensor, or a wialon.import_history backfill, shows it quickly.
+#
+# The trip logic is the vehicle_trip macro in wialon_vehicles.jinja.
+# Deploy order matters: homeassistant.reload_custom_templates before
+# template.reload, or the trip sensors render with the old macro.
+#
+# Trip boundaries are binary_sensor.my_car_in_use. Trips under 2 minutes are
+# not logged.
+# =============================================================================
+
+template:
+  # The open (or last) trip. State is its length in minutes; it changes once
+  # a minute while a trip is open and not at all between trips. Every
+  # attribute calls the macro itself, because `this` is only available
+  # inside entity templates.
+  - triggers:
+      - trigger: state
+        entity_id: binary_sensor.my_car_in_use
+        from: "off"
+        to: "on"
+        id: start
+      - trigger: state
+        entity_id: binary_sensor.my_car_in_use
+        from: "on"
+        to: "off"
+        id: end
+      - trigger: time_pattern
+        minutes: "/1"
+        id: tick
+    sensor:
+      - name: My car trip
+        unique_id: my_car_trip
+        unit_of_measurement: min
+        icon: mdi:map-marker-path
+        state: >
+          {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+          {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('minutes') }}
+        attributes:
+          active: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('active', false) }}
+          started: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('started') }}
+          ended: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('ended') }}
+          minutes: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('minutes') }}
+          ticks: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('ticks', 0) }}
+          engine_ticks: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('engine_ticks', 0) }}
+          ev_share: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('ev_share') }}
+          start_m: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('start_m') }}
+          km: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('km') }}
+          outdoor: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('outdoor') }}
+          used_start: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('used_start') }}
+          fuel_start: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('fuel_start') }}
+          fuel_last: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('fuel_last') }}
+          fuel_bad: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('fuel_bad', false) }}
+          fuel_l: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('fuel_l') }}
+          idle_ticks: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('idle_ticks', 0) }}
+          start_coolant: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('start_coolant') }}
+          max_coolant: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('max_coolant') }}
+          warm_min: >
+            {% from 'wialon_vehicles.jinja' import vehicle_trip %}
+            {{ (vehicle_trip('my_car', this.attributes, trigger.id) | from_json).get('warm_min') }}
+
+  # Closed trips, newest first, the last 20, appended when a trip closes.
+  # State: the latest logged trip's km. The fuel, EV-share and cold-trip
+  # figures below all read the `trips` attribute.
+  - triggers:
+      - trigger: state
+        entity_id: sensor.my_car_trip
+        attribute: active
+        from: true
+        to: false
+    sensor:
+      - name: My car last trip
+        unique_id: my_car_last_trip
+        unit_of_measurement: km
+        device_class: distance
+        icon: mdi:map-marker-path
+        state: >
+          {% set a = trigger.to_state.attributes %}
+          {% set old = this.attributes.get('trips', []) | list %}
+          {% set trips = ([{'ended': a.ended, 'minutes': a.minutes, 'km': a.km,
+                            'ticks': a.ticks, 'engine_ticks': a.engine_ticks,
+                            'ev_share': a.ev_share, 'outdoor': a.outdoor,
+                            'start_coolant': a.start_coolant,
+                            'max_coolant': a.max_coolant, 'warm_min': a.warm_min,
+                            'fuel_l': a.get('fuel_l'), 'idle_ticks': a.get('idle_ticks')}] + old)[:20]
+                         if (a.minutes or 0) >= 2 else old %}
+          {{ trips[0].km if trips else none }}
+        attributes:
+          trips: >
+            {% set a = trigger.to_state.attributes %}
+            {% set old = this.attributes.get('trips', []) | list %}
+            {{ ([{'ended': a.ended, 'minutes': a.minutes, 'km': a.km,
+                  'ticks': a.ticks, 'engine_ticks': a.engine_ticks,
+                  'ev_share': a.ev_share, 'outdoor': a.outdoor,
+                  'start_coolant': a.start_coolant,
+                  'max_coolant': a.max_coolant, 'warm_min': a.warm_min,
+                  'fuel_l': a.get('fuel_l'), 'idle_ticks': a.get('idle_ticks')}] + old)[:20]
+               if (a.minutes or 0) >= 2 else old }}
+
+  - sensor:
+      # Hybrids: the EV share over the last 10 logged trips, weighted by time
+      # in READY. It moves with the seasons (the engine runs more to heat the
+      # cabin in winter), so compare it with each trip's `outdoor` before
+      # reading a fall as battery or inverter wear. Delete on other cars.
+      - name: My car EV share recent trips
+        unique_id: my_car_ev_share_recent_trips
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: mdi:leaf
+        state: >
+          {% set last = (state_attr('sensor.my_car_last_trip', 'trips') or [])[:10] %}
+          {% set ticks = last | map(attribute='ticks') | select('number') | sum %}
+          {% set eng = last | map(attribute='engine_ticks') | select('number') | sum %}
+          {{ (100 * (1 - eng / ticks)) | round(0) if ticks >= 10 else none }}
+
+      # With coolant temperature: the share of the last 10 rated trips that
+      # ended before the coolant reached 80 °C. Each one is a cold start
+      # without the warm run that clears condensation from the oil, and only
+      # minutes of charging for the 12 V battery (vehicle_battery.yaml).
+      - name: My car cold trip share
+        unique_id: my_car_cold_trip_share
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: mdi:thermometer-low
+        state: >
+          {% set rated = (state_attr('sensor.my_car_last_trip', 'trips') or [])[:10]
+                         | selectattr('max_coolant', 'number') | list %}
+          {% set cold = rated | selectattr('max_coolant', 'lt', 80) | list %}
+          {{ (100 * (cold | count) / (rated | count)) | round(0) if rated | count >= 3 else none }}
+
+  - binary_sensor:
+      # A thermostat stuck open lets the engine warm slowly and never reach
+      # its working temperature on a real drive. The last two trips of 20
+      # minutes or more both peaking under 75 °C is that pattern; a healthy
+      # engine reaches 85 °C and more on trips that long.
+      - name: My car thermostat suspect
+        unique_id: my_car_thermostat_suspect
+        device_class: problem
+        availability: "{{ state_attr('sensor.my_car_last_trip', 'trips') is not none }}"
+        state: >
+          {% set long = (state_attr('sensor.my_car_last_trip', 'trips') or [])
+                        | selectattr('minutes', 'ge', 20)
+                        | selectattr('max_coolant', 'number') | list %}
+          {{ long | count >= 2 and (long[:2] | map(attribute='max_coolant') | max) < 75 }}
+
+automation:
+  - id: vehicle_engine_alert
+    alias: "Vehicles — engine alert"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.my_car_thermostat_suspect
+        from: "off"
+        to: "on"
+    actions:
+      - variables:
+          car: >
+            {% from 'wialon_vehicles.jinja' import vehicle_of %}{{ vehicle_of(trigger.entity_id.split('.')[1]) }}
+      - action: script.vehicle_notify
+        data:
+          title: "{{ trigger.to_state.name }}"
+          message: >
+            {% set t = (state_attr('sensor.' ~ car ~ '_last_trip', 'trips') or [])
+                       | selectattr('minutes', 'ge', 20)
+                       | selectattr('max_coolant', 'number') | list %}
+            The last two drives of 20 minutes or more peaked at
+            {{ t[:2] | map(attribute='max_coolant') | join(' and ') }} °C,
+            under 75 °C. A thermostat stuck open is the usual cause.
+          notification_id: "vehicle_{{ car }}_thermostat"

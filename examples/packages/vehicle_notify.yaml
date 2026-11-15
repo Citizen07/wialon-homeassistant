@@ -1,0 +1,39 @@
+# =============================================================================
+# Vehicle alerts — the one notifier every vehicle package calls
+#
+# Every alert in these examples goes through script.vehicle_notify, so this
+# is the only place to change where alerts go. It raises a persistent
+# notification (dismissed again by the packages when the condition clears)
+# and sends a push.
+#
+# Replace notify.notify with your own notify action, for example
+# notify.mobile_app_<your_phone>. notify.notify only exists when a legacy
+# notify platform (such as the mobile app) is set up.
+# =============================================================================
+
+script:
+  vehicle_notify:
+    alias: "Vehicles — notify"
+    mode: queued
+    fields:
+      title:
+        description: Notification title.
+        example: Car left open
+      message:
+        description: Notification text.
+        example: "Open: Front left door."
+      notification_id:
+        description: >-
+          Persistent notification ID. The packages dismiss it with the same
+          ID when the condition clears.
+        example: vehicle_my_car_left_open
+    sequence:
+      - action: persistent_notification.create
+        data:
+          title: "{{ title }}"
+          message: "{{ message }}"
+          notification_id: "{{ notification_id }}"
+      - action: notify.notify
+        data:
+          title: "{{ title }}"
+          message: "{{ message }}"

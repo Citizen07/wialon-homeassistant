@@ -1,0 +1,361 @@
+{#- Shared macros for the example vehicle packages (examples/packages/).
+
+    Copy this file to <config>/custom_templates/ and run the action
+    homeassistant.reload_custom_templates. Always reload custom templates
+    BEFORE reloading template entities (template.reload), or the entities
+    render with the previous version of these macros.
+
+    Entity names used here:
+    - `car` is the short name of your derived entities, `my_car` in the
+      examples: binary_sensor.my_car_in_use, sensor.my_car_fuel, ...
+    - `unit` is the prefix the Wialon integration gave your unit's entities,
+      `my_unit` in the examples: sensor.my_unit_vcc,
+      binary_sensor.my_unit_ignition, device_tracker.my_unit, ...
+    Both are set per car in vehicle_cfg below. -#}
+
+{#- Per-car settings: every car, keyed by its `car` name, as JSON. Add one
+    entry per car.
+
+    unit          entity prefix of the Wialon unit (see above).
+    hybrid        true for a hybrid or EV with a READY signal (Xirgo
+                  SENSOR_READY_TO_DRIVE). A hybrid is in use in READY with the
+                  engine stopped, charges its 12 V battery only in READY, and
+                  gets an EV-share figure per trip.
+    ignition      true when the tracker reports SENSOR_IGNITION. Without it,
+                  engine speed or movement stands in for "in use".
+    coolant       true when SENSOR_ENGINE_TEMPERATURE actually reports on your
+                  car. Many trackers cannot decode it from some cars' CAN and
+                  send 0 forever; check its history before turning this on.
+    warm          coolant °C counted as "warm" (trip warm-up time).
+    fuel_unit     '%' or 'L': what SENSOR_FUEL_LEVEL_1 reports on your car.
+                  It depends on the car and the tracker's CAN profile, not on
+                  the entity's unit, so compare it with the dashboard gauge.
+    tank_l        tank size in litres (converts a % gauge to litres).
+    saturates_at  gauge reading (in fuel_unit) at and above which the gauge
+                  is stuck at "full". Many cars show 100 % for days after a
+                  fill, so the top of the range carries no information.
+                  none if your gauge has no such plateau.
+    sloshes       true when the gauge swings while driving (seen: 7 -> 32 L
+                  within an hour without a fill). Only parked readings are
+                  then trusted, and per-trip fuel needs the counter.
+    fuel_counter  true when SENSOR_TOTAL_FUEL_USED reports (0.5 L steps).
+                  Preferred source of per-trip fuel when present.
+    full_l        a fill ending at or above this many litres counts as full,
+                  for gauges without saturates_at.
+    refuel_l      a parked reading this many litres above the previous parked
+                  one is a refuel.
+    loss_l        a reading this many litres below the last parked one,
+                  before the car has moved, is fuel lost (leak, siphoning).
+    doors         binary sensors (suffixes after `binary_sensor.<unit>_`)
+                  that count for "left open" and "door opened while armed".
+                  List only openings your car has and that work. Trackers
+                  report CAN bits for doors a car does not have: one
+                  car without rear doors had its "rear right door" flip every
+                  minute while driving and often ended a trip "on", so every
+                  trip raised a false "left open" alert until it was removed
+                  from this list.
+    outdoor       an outdoor temperature sensor, logged with each trip, or
+                  none.
+    silent_in_use_min / silent_parked_h
+                  how long without a message before the tracker counts as
+                  silent. Xirgo units commonly send every minute while in use
+                  and a heartbeat every few hours parked (8 h on the units
+                  this was built on); set these just outside your cadence.
+
+    Example of a hybrid with a %-gauge that saturates:
+      'my_hybrid': {'unit': 'my_hybrid_unit', 'hybrid': true,
+                    'ignition': true, 'coolant': false, 'warm': 80,
+                    'fuel_unit': '%', 'tank_l': 65, 'saturates_at': 95,
+                    'sloshes': false, 'fuel_counter': false, 'full_l': none,
+                    'refuel_l': 10, 'loss_l': 3, ...} -#}
+{%- macro vehicle_cars() -%}
+{%- set cars = {
+  'my_car': {
+    'unit': 'my_unit',
+    'hybrid': false,
+    'ignition': true,
+    'coolant': true,
+    'warm': 80,
+    'fuel_unit': 'L',
+    'tank_l': 60,
+    'saturates_at': none,
+    'sloshes': true,
+    'fuel_counter': true,
+    'full_l': 55,
+    'refuel_l': 8,
+    'loss_l': 5,
+    'doors': ['doors_f_l', 'doors_f_r', 'doors_r_l', 'doors_r_r', 'trunk', 'bonnet'],
+    'outdoor': 'sensor.outdoor_temperature',
+    'silent_in_use_min': 5,
+    'silent_parked_h': 9,
+  },
+} -%}
+{{- cars | to_json -}}
+{%- endmacro -%}
+
+{#- One car's settings from vehicle_cars, as JSON. -#}
+{%- macro vehicle_cfg(car) -%}
+{{- (vehicle_cars() | from_json)[car] | to_json -}}
+{%- endmacro -%}
+
+{#- The car an entity belongs to, from its object ID (the part after the
+    domain): the car whose name or Wialon unit prefix it starts with, or ''
+    when none does. Used by the alert automations to find the car's other
+    entities. -#}
+{%- macro vehicle_of(object) -%}
+{%- set ns = namespace(car='') -%}
+{%- for car, c in (vehicle_cars() | from_json).items() -%}
+  {%- if not ns.car and (object.startswith(car ~ '_')
+                         or object.startswith(c.unit ~ '_') or object == c.unit) -%}
+    {%- set ns.car = car -%}
+  {%- endif -%}
+{%- endfor -%}
+{{- ns.car -}}
+{%- endmacro -%}
+
+{#- Litres from a SENSOR_FUEL_LEVEL_1 reading, per the car's fuel_unit. -#}
+{%- macro vehicle_litres(car, raw) -%}
+{%- set c = vehicle_cfg(car) | from_json -%}
+{%- set raw = raw | float(0) -%}
+{{- (raw * c.tank_l / 100 if c.fuel_unit == '%' else raw) | round(1) -}}
+{%- endmacro -%}
+
+{#- Per-trip accumulator (sensor.<car>_trip in vehicle_engine.yaml).
+
+    One call advances a trip by one event and returns the whole trip as JSON:
+    `start` opens it, `tick` (once a minute) samples it, `end` closes it. A
+    tick that finds the car in use with no open trip opens one, and a tick
+    that finds an open trip with the car no longer in use closes it, so a
+    start or end missed across a restart or reload cannot lose or strand a
+    trip.
+
+    `prev` is the trip entity's current attributes (this.attributes).
+
+    Keys: active, started, ended, minutes, ticks, engine_ticks, ev_share,
+    start_m, km, outdoor, start_coolant, max_coolant, warm_min, used_start,
+    fuel_start, fuel_last, fuel_bad, fuel_l, idle_ticks.
+
+    Samples are one a minute, from values the integration polls once a
+    minute, so shares and times are estimates at that resolution.
+    - Hybrid: a tick counts only in READY. ev_share is the % of those ticks
+      with the engine stopped.
+    - Coolant: counts only when the tracker reported it during this trip
+      (its `last_changed`, the tracker's time). The integration holds the
+      last value between messages, so without that check a trip would start
+      with the previous trip's hot coolant. warm_min is minutes to `warm` °C,
+      none if never.
+    - km comes from the tracker's metre distance counter (SENSOR_DISTANCE).
+    - fuel_l is the fuel the trip used, in litres: the total-fuel-used
+      counter, end minus start, when the car has one. Otherwise the level
+      fall over the trip, from readings above 0 and below the saturation
+      point only (0 is a start-up glitch; the top is a plateau). A rise of
+      more than 3 % of the tank marks a refuel inside the trip and voids the
+      figure. With a sloshing gauge and no counter there is no trip fuel.
+      A % gauge is coarse (1 % of 60 L is 0.6 L), so single trips are
+      rough; sums over several are not.
+    - idle_ticks counts in-use minutes standing still (GNSS speed under
+      3 km/h): idling, or READY at a standstill on a hybrid. -#}
+{%- macro vehicle_trip(car, prev, tid) -%}
+{%- set c = vehicle_cfg(car) | from_json -%}
+{%- set u = c.unit -%}
+{%- set t = dict(prev or {}) -%}
+{%- set in_use = is_state('binary_sensor.' ~ car ~ '_in_use', 'on') -%}
+{%- set dist = states('sensor.' ~ u ~ '_distance') | float(none) -%}
+{%- if tid == 'start' or (tid == 'tick' and in_use and not t.get('active')) -%}
+  {%- set t = {'active': true, 'started': now().isoformat(), 'ended': none,
+               'minutes': 0, 'ticks': 0, 'engine_ticks': 0, 'ev_share': none,
+               'start_m': dist, 'km': none,
+               'outdoor': states(c.outdoor) | float(none) if c.outdoor else none,
+               'start_coolant': none, 'max_coolant': none, 'warm_min': none,
+               'used_start': states('sensor.' ~ u ~ '_total_fuel_used') | float(none)
+                             if c.fuel_counter else none,
+               'fuel_start': none, 'fuel_last': none, 'fuel_bad': false,
+               'fuel_l': none, 'idle_ticks': 0} -%}
+{%- elif t.get('active') -%}
+  {%- set started = t.started | as_datetime if t.get('started') else none -%}
+  {%- set minutes = ((now() - started).total_seconds() / 60) | round(0) | int if started else 0 -%}
+  {%- set t = dict(t, minutes=minutes) -%}
+  {%- if tid == 'end' or not in_use -%}
+    {%- set km = ((dist - t.start_m) / 1000) | round(1)
+                 if dist is not none and t.start_m is not none else none -%}
+    {%- set ev = (100 * (1 - t.engine_ticks / t.ticks)) | round(0) | int
+                 if c.hybrid and t.ticks >= 3 else none -%}
+    {%- if c.fuel_counter -%}
+      {%- set used = states('sensor.' ~ u ~ '_total_fuel_used') | float(none) -%}
+      {%- set fuel = (used - t.used_start) | round(1)
+                     if used is not none and t.get('used_start') is not none
+                        and used >= t.used_start else none -%}
+    {%- elif not c.sloshes -%}
+      {%- set fuel = (t.fuel_start - t.fuel_last) | round(2)
+                     if not t.get('fuel_bad') and t.get('fuel_start') is not none
+                        and t.get('fuel_last') is not none
+                        and t.fuel_start >= t.fuel_last else none -%}
+    {%- else -%}
+      {%- set fuel = none -%}
+    {%- endif -%}
+    {%- set t = dict(t, active=false, ended=now().isoformat(), km=km, ev_share=ev,
+                        fuel_l=fuel) -%}
+  {%- elif tid == 'tick' -%}
+    {%- set driving = is_state('binary_sensor.' ~ car ~ '_ready', 'on')
+                      if c.hybrid else true -%}
+    {%- if driving -%}
+      {%- set eng = states('sensor.' ~ u ~ '_engine_speed') | float(0) > 0 -%}
+      {%- set t = dict(t, ticks=t.ticks + 1,
+                          engine_ticks=t.engine_ticks + (1 if eng else 0)) -%}
+    {%- endif -%}
+    {%- if states('sensor.' ~ u ~ '_speed') | float(99) < 3 -%}
+      {%- set t = dict(t, idle_ticks=t.get('idle_ticks', 0) + 1) -%}
+    {%- endif -%}
+    {%- if not c.fuel_counter and not c.sloshes -%}
+      {%- set raw = states('sensor.' ~ u ~ '_fuel_level_1') | float(0) -%}
+      {%- set v = vehicle_litres(car, raw) | float -%}
+      {%- if raw > 0 and (c.saturates_at is none or raw < c.saturates_at) -%}
+        {%- set t = dict(t,
+              fuel_bad=t.get('fuel_bad') or (t.get('fuel_last') is not none
+                                             and v > t.fuel_last + c.tank_l * 0.03),
+              fuel_start=t.fuel_start if t.get('fuel_start') is not none else v,
+              fuel_last=v) -%}
+      {%- endif -%}
+    {%- endif -%}
+    {%- if c.coolant -%}
+      {%- set ct = 'sensor.' ~ u ~ '_engine_temperature' -%}
+      {%- set cv = states(ct) | float(none) -%}
+      {%- set c_raw = state_attr(ct, 'last_changed') -%}
+      {%- set c_at = c_raw | as_datetime if c_raw else none -%}
+      {%- if cv is not none and c_at is not none and started
+             and c_at >= started - timedelta(minutes=2) -%}
+        {%- set t = dict(t,
+              start_coolant=t.start_coolant if t.start_coolant is not none else cv,
+              max_coolant=[t.max_coolant if t.max_coolant is not none else cv, cv] | max,
+              warm_min=t.warm_min if t.warm_min is not none
+                       else (minutes if cv >= c.warm else none)) -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endif -%}
+{{- t | to_json -}}
+{%- endmacro -%}
+
+{#- Fuel in the tank, refuels and losses (sensor.<car>_fuel in
+    vehicle_fuel.yaml).
+
+    Called on each new fuel_level_1 reading; `prev` is the fuel entity's
+    current attributes. Returns JSON with: litres, raw, saturated, parked_l,
+    parked_m, parked_sat, min_l, refuel, loss, skip.
+
+    - A reading of 0 is a start-up glitch (`skip`: keep the previous state).
+    - At or above saturates_at the litres are a lower bound (`saturated`).
+    - Parked readings (car not in use) are the reference. A refuel is a
+      parked reading `refuel_l` above the previous parked one. Its `before`
+      is the lowest reading since that parked reading on a smooth gauge, and
+      the previous parked reading on a sloshing one.
+    - A loss is any reading `loss_l` below the last parked one taken within
+      200 m of where the car was parked, i.e. before it has moved. Not judged
+      while the gauge is saturated.
+    - Events are dicts stamped with the reading's tracker time (`raw_at`), so
+      a new event is a changed attribute, which is what the refuel log and
+      the loss alert trigger on. -#}
+{%- macro vehicle_fuel(car, prev, raw, raw_at) -%}
+{%- set c = vehicle_cfg(car) | from_json -%}
+{%- set u = c.unit -%}
+{%- set t = dict(prev or {}) -%}
+{%- set raw = raw | float(0) -%}
+{%- if raw <= 0 -%}
+  {{- dict(t, skip=true) | to_json -}}
+{%- else -%}
+  {%- set litres = vehicle_litres(car, raw) | float -%}
+  {%- set sat = c.saturates_at is not none and raw >= c.saturates_at -%}
+  {%- set m = states('sensor.' ~ u ~ '_distance') | float(none) -%}
+  {%- set odo = states('sensor.' ~ u ~ '_total_distance') | float(none) -%}
+  {%- set parked = is_state('binary_sensor.' ~ car ~ '_in_use', 'off') -%}
+  {%- set pl = t.get('parked_l') -%}
+  {%- set pm = t.get('parked_m') -%}
+  {%- set min_l = [t.min_l, litres] | min if t.get('min_l') is not none else litres -%}
+  {%- set refuel = t.get('refuel') -%}
+  {%- set loss = t.get('loss') -%}
+  {%- set moved = m is none or pm is none or (m - pm) | abs >= 200 -%}
+  {%- if pl is not none and not moved and not sat and not t.get('parked_sat')
+         and pl - litres >= c.loss_l -%}
+    {%- set loss = {'at': raw_at, 'odo_km': odo, 'before': pl, 'after': litres} -%}
+    {%- set pl = litres -%}
+  {%- endif -%}
+  {%- if parked and pl is not none and litres - pl >= c.refuel_l -%}
+    {%- set refuel = {'at': raw_at, 'odo_km': odo,
+                      'before': pl if c.sloshes else min_l,
+                      'after': litres, 'saturated': sat} -%}
+  {%- endif -%}
+  {%- if parked -%}
+    {{- dict(t, litres=litres, raw=raw, saturated=sat, parked_l=litres,
+             parked_m=m, parked_sat=sat, min_l=litres, refuel=refuel, loss=loss,
+             skip=false) | to_json -}}
+  {%- else -%}
+    {{- dict(t, litres=litres, raw=raw, saturated=sat, parked_l=pl, min_l=min_l,
+             refuel=refuel, loss=loss, skip=false) | to_json -}}
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- Refuel log (sensor.<car>_last_refuel in vehicle_fuel.yaml): the last 20
+    fills, newest first.
+
+    `prev` is the log entity's attributes; `tid` is 'refuel' (a new refuel
+    event from the fuel sensor, passed as `refuel`) or 'litres' (the pump
+    input, passed as `litres`). Returns the new list as JSON.
+
+    Entries: at, odo_km, before, after, saturated, litres, full, l_per_100.
+    A fill is full when the gauge ends saturated (gauges with saturates_at)
+    or at full_l litres or more (the rest). Pump litres attach to the newest
+    entry if it has none and is under 3 days old; otherwise they record a
+    fill the gauge missed. l_per_100 is full-to-full: the litres of every
+    fill since the previous full one over the km between, and only when
+    each of those has litres. -#}
+{%- macro vehicle_refuel_log(car, prev, tid, refuel=none, litres=0) -%}
+{%- set c = vehicle_cfg(car) | from_json -%}
+{%- set u = c.unit -%}
+{%- set old = (prev or {}).get('refuels', []) | list -%}
+{%- if tid == 'refuel' -%}
+  {%- if refuel is mapping and (old | count == 0 or old[0].at != refuel.at) -%}
+    {%- set full = refuel.saturated if c.saturates_at is not none
+                   else refuel.after >= c.full_l -%}
+    {{- (([dict(refuel, litres=none, full=full, l_per_100=none)] + old)[:20]) | to_json -}}
+  {%- else -%}
+    {{- old | to_json -}}
+  {%- endif -%}
+{%- else -%}
+  {%- set l = litres | float(0) -%}
+  {%- if l <= 0 -%}
+    {{- old | to_json -}}
+  {%- else -%}
+    {%- if old | count and old[0].litres is none and old[0].at
+           and (now() - (old[0].at | as_datetime)).total_seconds() < 3 * 86400 -%}
+      {%- set e = dict(old[0], litres=l) -%}
+      {%- set rest = old[1:] -%}
+    {%- else -%}
+      {%- set after = states('sensor.' ~ car ~ '_fuel') | float(none) -%}
+      {%- set sat = state_attr('sensor.' ~ car ~ '_fuel', 'saturated') == true -%}
+      {%- set e = {'at': now().isoformat(), 'before': none, 'after': after,
+                   'odo_km': states('sensor.' ~ u ~ '_total_distance') | float(none),
+                   'saturated': sat,
+                   'full': sat if c.saturates_at is not none
+                           else (after or 0) >= c.full_l,
+                   'litres': l, 'l_per_100': none} -%}
+      {%- set rest = old -%}
+    {%- endif -%}
+    {%- set ns = namespace(sum=e.litres, ok=true, l100=none, done=false) -%}
+    {%- if e.full -%}
+      {%- for x in rest if not ns.done -%}
+        {%- if x.full -%}
+          {%- set km = (e.odo_km or 0) - (x.odo_km or 0) -%}
+          {%- set ns.l100 = (100 * ns.sum / km) | round(2) if ns.ok and km > 0 else none -%}
+          {%- set ns.done = true -%}
+        {%- elif x.litres is none -%}
+          {%- set ns.ok = false -%}
+        {%- else -%}
+          {%- set ns.sum = ns.sum + x.litres -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+    {{- (([dict(e, l_per_100=ns.l100)] + rest)[:20]) | to_json -}}
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
